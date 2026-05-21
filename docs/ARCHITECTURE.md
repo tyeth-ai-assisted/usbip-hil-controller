@@ -80,10 +80,22 @@ docs/
   DEPLOY.md                # systemd unit, user creation, udev rules
 vendor/                    # git submodules — see vendor/README.md
   protomq/                 # tyeth-ai-assisted/protomq @ displays-v2-testing
+                           #   (dual-push to tyeth/protomq)
   usbip-autoattach/        # tyeth-ai-assisted/usbip-autoattach @ main
   hil-detection/           # tyeth-ai-assisted/hil-detection @ main
+  wippersnapper-arduino/   # tyeth-ai-assisted/adafruit-Adafruit_Wippersnapper_Arduino @ migrate-api-v2
+                           #   (fetch-only upstream remote to adafruit/...)
+                           # Python WS variant is private/unreleased — not vendored;
+                           # wiring info for SBC targets comes from vendor/protomq/scripts.
 scripts/
-  setup-submodules.sh      # configures dual-push for vendor/protomq
+  setup-submodules.sh      # dual-push for vendor/protomq, upstream remote for WS Arduino
+examples/                  # caller-side templates a downstream repo copies into its CI
+  wippersnapper-arduino/secrets.example.json
+  wippersnapper-python/{secrets.example.json,.env.example}
+  hil-call.sh              # submit + long-poll reference flow
+  README.md
+.github/workflows/
+  example-hil-call.yml     # workflow_dispatch example of the caller flow
 src/
   hil_controller/
     __init__.py
@@ -609,7 +621,40 @@ Allow-list of script names lives in config; submissions referencing an
 unknown name — or a known name whose `REQUIRES` cannot be satisfied by
 any seat in the caller's pool — are rejected at the API boundary.
 
-### 11.1 Two existing test bodies we integrate with
+### 11.1 Wippersnapper firmware variants
+
+Two variants exist, both speaking ProtoMQ; the bench can target
+either with the same job-submission shape.
+
+- **Arduino** — `vendor/wippersnapper-arduino` (the `migrate-api-v2`
+  branch of the ai-assisted fork; `upstream` remote points at
+  `adafruit/Adafruit_Wippersnapper_Arduino` for upstreaming via PR).
+  Targets microcontrollers (ESP32-S2/S3, SAMD51, RP2040). Flashed via
+  esptool / uf2-msc / picotool. Consumes `secrets.json` (`io_username`,
+  `io_key`, `network_type_wifi.{network_ssid,network_password}`, plus
+  the bench's `protomq.{host,port}` override). The canonical example
+  is `vendor/wippersnapper-arduino/examples/secrets-examples/
+  secrets-wifi.json`; this repo's `examples/wippersnapper-arduino/
+  secrets.example.json` extends it with the `protomq` block the
+  controller injects at flash time.
+
+- **Python** — single-board-computer client, **currently
+  private/unreleased**. Not vendored. When it opens up, expect the
+  `displays-v2` branch with sub-submodules for `protomq` and
+  `wippersnapper-protobufs`, and a similar config flow (`secrets.json`
+  for the long-running client, `.env` for pytest runs). The bench
+  already covers the Pi-class targets via the Pi 5 broker host (§13).
+  Wiring info for SBC targets is reachable today from
+  `vendor/protomq/scripts/*.json` — some of those demos are
+  Pi-targeted even though the rest are Arduino-targeted.
+
+The secrets-substitution flow (caller renders a `secrets.example.json`
+with `envsubst`, uploads alongside firmware, controller validates +
+flashes + runs) is documented in `examples/README.md` with a
+`workflow_dispatch` reference workflow in
+`.github/workflows/example-hil-call.yml`.
+
+### 11.2 Two existing test bodies we integrate with
 
 **`vendor/protomq/scripts/*.json`** — JSON, *not* Python. Each file is
 a sequence of `steps` keyed off ProtoMQ topics (`checkin.request`,
@@ -741,6 +786,13 @@ Things worth resolving before implementation, in rough priority order:
    `hardware.md` — "does not produce unique device on toggle test".
    Worth a bench session to either populate or formally retire that
    channel; the resolver will currently see it as a "missing seat".
+10. **Python Wippersnapper repo access.** The Python WS variant is
+    private/unreleased and not vendored. When it opens up we need
+    (a) the canonical repo URL + branch, (b) confirmation of its
+    sub-submodule layout (the user described `displays-v2` →
+    `protomq` + `wippersnapper-protobufs`), (c) whether dual-push to
+    an Adafruit upstream is desired the way protomq dual-pushes to
+    `tyeth/protomq`.
 
 ## 16. Milestones
 
@@ -759,11 +811,16 @@ A suggested cut, each landable on its own:
   file, audit log.
 - **M3** — real adapters: serial capture, one flasher (esptool), one
   reset path. Drive a single fixed microcontroller end-to-end.
+  Validate the `examples/hil-call.sh` + `example-hil-call.yml` flow
+  against this end-to-end pipeline.
 - **M4** — USB-IP integration via usbip-auto-attach, solenoid-hub
   reset, mux adapters, multi-device scheduling with resource locks
-  that respect the connectivity matrix.
+  that respect the connectivity matrix. Add the `uf2-msc` and
+  `picotool` flashers so Wippersnapper-Arduino targets work
+  end-to-end alongside the M3 esptool path.
 - **M5** — ProtoMQ test helpers, camera capture, artifact storage,
-  Prometheus metrics.
+  Prometheus metrics. Land the Python Wippersnapper submodule if/when
+  it's reachable.
 
 Past M5 we revisit dynamic hardware switching and GitHub check-run
 posting based on what we've learned.
