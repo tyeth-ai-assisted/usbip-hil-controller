@@ -16,9 +16,13 @@ The service is the seam between:
 
 - **Caller side** — a CI step that submits a job and waits for a result
   (long-poll, up to ~5 min per call, re-issued on timeout).
-- **Pi side** — orchestrates flashing, reset, serial capture, optional
-  USB-IP attach, and runs the canned test script (e.g. ProtoMQ
-  validation against captured log output).
+- **Pi side** — runs on `rpi-displays` (the DUT controller Pi Zero 2W,
+  `192.168.1.234`), orchestrates flashing, reset (via the MCP23017
+  solenoid driver on the Genesys USB hub), serial capture, optional
+  USB-IP attach, and runs the canned test script. A separate Pi 5 at
+  `192.168.1.210` runs the ProtoMQ broker the DUTs talk to during
+  protomq-flavoured tests; the controller observes the broker but
+  doesn't host it.
 
 A thin web UI sits in front of the same API for human inspection of
 queue state, device availability, the wiring graph (devices + aux +
@@ -74,6 +78,12 @@ docs/
   ARCHITECTURE.md          # this file
   API.md                   # to follow once endpoints firm up
   DEPLOY.md                # systemd unit, user creation, udev rules
+vendor/                    # git submodules — see vendor/README.md
+  protomq/                 # tyeth-ai-assisted/protomq @ displays-v2-testing
+  usbip-autoattach/        # tyeth-ai-assisted/usbip-autoattach @ main
+  hil-detection/           # tyeth-ai-assisted/hil-detection @ main
+scripts/
+  setup-submodules.sh      # configures dual-push for vendor/protomq
 src/
   hil_controller/
     __init__.py
@@ -109,7 +119,8 @@ src/
       manifest.py          # YAML loader for devices + aux + mux matrix
       resolver.py          # selector → (device, aux bindings, mux ops)
       importers/
-        protomq_scripts.py # scrape display-v2 test scripts → manifest
+        protomq_scripts.py # parse vendor/protomq/scripts/*.json → manifest
+        hardware_md.py     # parse vendor/hil-detection/references/hardware.md
     tests/
       runner.py            # invokes named scripts from the HIL repo
       protomq.py           # ProtoMQ-specific log-assertion helpers
@@ -214,62 +225,97 @@ test scripts (see §15 open question 7).
 ### 5.5 Connectivity matrix (multiplex)
 
 Most aux-to-device wiring in v1 is **fixed**: aux `X` is bolted to
-device `Y` and only `Y`. But some test rigs route auxes through a
-mux — a TCA9548 I²C switch, an SPI mux, a relay-controlled GPIO
-cross-bar, a USB hub with per-port power control. The manifest models
-this uniformly so the scheduler can answer "can I give job J a device
-of kind K with a 240x320 SPI display attached?" without the caller
-knowing which physical seats satisfy that.
+device `Y` and only `Y`. But the bench *does* have a real shared
+resource: the Genesys Logic USB hub (`05e3:0610`, dual-cascaded on
+`rpi-displays`) with an **MCP23017 solenoid driver at I²C `0x20`**
+controlling power/reset per channel. That hub is effectively a
+per-port power mux; the manifest models it uniformly so the scheduler
+can answer "can I give job J a device of kind K with a 240x320 SPI
+display attached?" without the caller knowing which physical seats
+satisfy that. Future genuine signal muxes (TCA9548 I²C switch, SPI
+mux, relay GPIO crossbar) drop into the same model.
 
 ```yaml
-# /etc/hil/topology.yaml  (excerpt, illustrative)
+# /etc/hil/topology.yaml  (excerpt — grounded in vendor/hil-detection/references/hardware.md)
+hosts:
+  - id: rpi-displays
+    role: dut-controller
+    addr: 192.168.1.234
+  - id: pi5-protomq
+    role: protomq-broker
+    addr: 192.168.1.210
+    mqtt_port: 1884
+
+muxes:
+  - id: usb-hub-01
+    kind: usb-power
+    model: genesys-logic-05e3-0610
+    host: rpi-displays
+    control:
+      adapter: mcp23017-solenoid
+      i2c_bus: 1
+      i2c_addr: 0x20
+      script: vendor/hil-detection/usb_hub.py
+    exclusive: false              # per-channel independent
+    timing_profiles:
+      standard:   { on: "200ms-H,LOW", off: "200ms-H,500ms-L,1000ms-H,LOW" }
+      samd51_uf2: { on: "200ms-H,LOW", off: "200ms-H,100ms-L,300ms-H,LOW" }
+
 devices:
-  - id: rp2040-01
-    kind: microcontroller
-    model: rp2040
-    pool: public
-  - id: esp32s3-01
+  - id: qtpy-s3-01
     kind: microcontroller
     model: esp32-s3
+    capabilities: [native-cdc, spi, i2c]
+    usb: { vid: "239a", pid: "8143" }
+    serial_port: /dev/serial/by-id/...
+    reset: { mux: usb-hub-01, channel: 0, profile: standard }
+    pool: public
+  - id: pyportal-titano-01
+    kind: microcontroller
+    model: samd51
+    capabilities: [uf2, spi, i2c]
+    usb: { vid: "239a", pid: "8053", uf2_vid: "239a", uf2_pid: "0035" }
+    flasher: uf2-msc
+    reset: { mux: usb-hub-01, channel: 4, profile: samd51_uf2 }
+    pool: public
+  - id: pico-w-01
+    kind: microcontroller
+    model: rp2040
+    capabilities: [bootsel-msc, spi, i2c]
+    flasher: picotool
+    reset: { mux: usb-hub-01, channel: 6, profile: standard }
     pool: public
 
 auxes:
-  - id: ili9341-2.4-01
+  - id: oled128x32-metro-s2
     kind: display
-    model: ili9341
-    interface: spi
-    capabilities: [display, "display:240x320", "display:spi"]
-    observability: camera
-  - id: bme280-01
-    kind: sensor
-    model: bme280
+    model: ssd1306
     interface: i2c
-    capabilities: [sensor, "sensor:env", "i2c-target:0x76"]
+    capabilities: [display, "display:128x32", "display:i2c"]
+    signals: { sda: D47, scl: D48, addr: 0x3c }
+    observability: camera
+  - id: qualia-round-480-01
+    kind: display
+    model: st7701
+    interface: ttl-rgb666
+    capabilities: [display, "display:480x480", "display:ttl-rgb666"]
+    signals: { r: [D1,D2,D42], g: [D21,D47,D48], b: [D10,D11,D12] }
+    observability: camera
 
 connections:
-  # Fixed wiring: aux belongs to exactly one device.
-  - aux: bme280-01
-    device: rp2040-01
+  # Fixed wiring: imported from vendor/protomq/scripts/*.json.
+  - aux: oled128x32-metro-s2
+    device: metro-s2-01
     bus: i2c0
-
-  # Multiplexed: aux can be routed to any of several devices via a mux.
-  - aux: ili9341-2.4-01
-    via:
-      mux: spi-mux-01
-      channels:
-        rp2040-01: 0
-        esp32s3-01: 1
-
-muxes:
-  - id: spi-mux-01
-    kind: spi
-    control: { adapter: gpio-relay, channel: 3 }
-    exclusive: true       # only one downstream device active at a time
+  - aux: qualia-round-480-01
+    device: qualia-s3-01
+    bus: ttl-rgb666
 ```
 
 Three resolver rules fall out of this:
 
 1. **Fixed-wired aux** is implicitly locked when its device is locked.
+   This is the v1 common case.
 2. **Multiplexed aux** is a separate lockable resource; the scheduler
    acquires `(device, aux, mux)` together, then issues a mux switch
    adapter call before the worker enters `preparing`.
@@ -281,6 +327,40 @@ Three resolver rules fall out of this:
 If no mux exists, jobs that need an aux the assigned device can't
 reach are rejected at submission time with a structured error rather
 than failing mid-flash.
+
+### 5.6 Where the manifest comes from
+
+Two existing artefacts seed the first `topology.yaml` — neither is
+authoritative on its own, but together they cover the bench:
+
+- **`vendor/hil-detection/references/hardware.md`** — hosts, USB hub
+  VID:PID, MCP23017 control address, the 8-channel solenoid map
+  (channel → board, USB VID:PID, USB serial, expected `/dev/ttyACM*`),
+  and the timing profiles. Source of truth for *power/reset wiring*.
+- **`vendor/protomq/scripts/*.json`** — one demo per `(board, display)`
+  pair. Each file has `display.add` with one of `i2c { busSda, busScl,
+  deviceAddress }`, `spi { … }`, or `ttlRgb666 { pinR0…pinB2 }`, the
+  driver name (`SSD1306`, `SH1107`, `ST7701`, …), and the panel ID.
+  Source of truth for *device↔display wiring + display interface*.
+
+The `protomq_scripts.py` importer:
+
+1. Walks `vendor/protomq/scripts/*.json`.
+2. Parses the filename (`feather-s2-sh1107-demo.json` →
+   `device=feather-s2`, `aux=sh1107`) and the `display.add` step.
+3. Emits an `auxes:` entry per unique `(driver, panel, interface)`
+   tuple and a `connections:` entry binding it to the device.
+4. Cross-references the device against `hardware.md` to fill in
+   `usb.vid/pid`, `reset.channel`, and `reset.profile`.
+5. Writes a draft `topology.yaml` and a `topology.unresolved.md`
+   listing any (a) scripts whose device can't be found in
+   `hardware.md`, (b) `hardware.md` channels with no matching script,
+   (c) pin assignments that vary between scripts targeting the same
+   board.
+
+Re-running the importer is non-destructive — humans own the final
+`topology.yaml`; the importer regenerates a side-by-side `*.imported`
+file for diffing.
 
 ## 6. Job state machine
 
@@ -461,17 +541,33 @@ class DeviceAdapter(Protocol):
 
 Concrete adapters compose smaller pieces:
 
-- `UsbIpAttach` — shells `usbip` via the usbip-auto-attach repo,
-  surfaces busid back as a local `/dev/...` node.
-- `SolenoidHubReset` — talks to the USB hub controller that drives the
-  reset solenoid; channel per device from YAML.
-- `Flasher` — pluggable: esptool, picotool, dfu-util, a Snapper-Python
-  uploader, a Snapper-Arduino sketch upload, or "no-op" for
-  pre-provisioned devices.
+- `UsbIpAttach` — uses `vendor/usbip-autoattach`. That repo is split:
+  the **server side** is a udev rule + `usbip-autobind` helper installed
+  on the host exporting devices (rebinds to `usbip-host` on every
+  re-enumeration, so resets during flashing don't drop the export);
+  the **client side** is a stdlib-only Python reconciliation loop that
+  reads vhci sysfs and reattaches busids when ports go to error or new
+  devices appear. The adapter just supervises the client loop and
+  reports per-busid state up to the worker.
+- `Mcp23017Solenoid` — talks to the MCP23017 at I²C `0x20` on
+  rpi-displays via `vendor/hil-detection/usb_hub.py` (parameterised
+  timings) or `solenoid_hub_control.py` (fixed timings). Channel
+  per-device from the manifest; **timing profile** (`standard`,
+  `samd51_uf2`, …) also from the manifest, because SAMD51 boards need
+  a specific short/long pulse sequence to enter the UF2 bootloader vs
+  the standard off sequence.
+- `Flasher` — pluggable: `esptool` (ESP), `picotool` + 1200-baud CDC
+  sentinel (RP2040 BOOTSEL chain, see `vendor/hil-detection/scripts/
+  pico_hil_flash.sh` for the three-stage strategy already in use),
+  `uf2-msc` (mount the BOOTSEL drive and copy `.uf2`), a
+  Snapper-Python uploader, a Snapper-Arduino sketch upload, or
+  "no-op" for pre-provisioned devices.
 - `SerialCapture` — `pyserial-asyncio`, line-buffered, tee'd to both
-  the event log and an on-disk artifact file.
+  the event log and an on-disk artifact file. Uses
+  `/dev/serial/by-id/...` because `ttyACM*` numbering is unstable
+  across re-enumeration.
 - `CameraCapture` — optional, captures N frames around interesting
-  events for visual confirmation.
+  events for visual confirmation against the display under test.
 
 Test scripts (section 11) call into the same adapter the worker holds,
 so a script can request an additional reset or a fresh serial window
@@ -513,17 +609,35 @@ Allow-list of script names lives in config; submissions referencing an
 unknown name — or a known name whose `REQUIRES` cannot be satisfied by
 any seat in the caller's pool — are rejected at the API boundary.
 
-### 11.1 Importing from the protomq display-v2 scripts
+### 11.1 Two existing test bodies we integrate with
 
-The current source of truth for which board is wired to which display
-lives implicitly inside the test scripts in the protomq repo's
-`display-v2` branch (`scripts/` folder). Until those scripts are
-ported to declare a `REQUIRES` block, the topology importer
-(`src/hil_controller/topology/importers/protomq_scripts.py`) will
-parse them and emit a starting `topology.yaml` plus a list of scripts
-whose wiring it could not infer. That bootstrap is one-shot; after the
-manifest exists, the scripts get rewritten to consume `ctx.aux[...]`
-instead of hard-coded pin assignments. See §15 open question 7.
+**`vendor/protomq/scripts/*.json`** — JSON, *not* Python. Each file is
+a sequence of `steps` keyed off ProtoMQ topics (`checkin.request`,
+`display.addedOrReplaced`, …) with `send` payloads and `waitFor`
+gates. They are run by the ProtoMQ broker (Pi5 at `192.168.1.210`,
+MQTT port `1884`); the device under test connects, the broker replies
+according to the script, and the script asserts log/state at each
+step. In v1 the controller doesn't re-implement this — a
+`protomq.<script-name>` controller-side test just (a) brings the
+device up via the device adapter, (b) points it at the ProtoMQ
+broker, (c) tails serial + observes the broker's view of the
+exchange, (d) calls pass/fail based on whether the script reached its
+terminal step. The JSONs feed the topology importer for wiring info
+(§5.6), not the runtime.
+
+**`vendor/hil-detection/tests/`** — pytest suites
+(`test_circuitpython.py`, `test_micropython.py`,
+`test_wippersnapper.py`) with a `conftest.py` that already drives the
+bench (SSH to `rpi-displays`, toggle the USB hub, flash via
+`pico_hil_flash.sh`, mount CIRCUITPY, etc). v1 of the controller is
+intended to **replace the SSH pattern by running on rpi-displays
+directly** — the fixtures stay, but `RPI_HOST` / `sshpass` go away and
+the fixtures call into the controller's adapter layer instead. Until
+that port is done, the controller can shell into pytest with markers
+(`pytest -m circuitpython tests/test_circuitpython.py`) and capture
+the report as the job result.
+
+See §15 open question 7 for the manifest ownership choice.
 
 ## 12. Security posture
 
@@ -545,13 +659,31 @@ instead of hard-coded pin assignments. See §15 open question 7.
 
 ## 13. Deployment
 
-- systemd unit running `uvicorn hil_controller.main:app` bound to
-  `127.0.0.1`. Caddy or nginx in front terminates TLS and serves the
-  dashboard over the LAN.
+The bench is **two-host**, not one (per
+`vendor/hil-detection/references/hardware.md`):
+
+- **rpi-displays** (`192.168.1.234`, Pi Zero 2W) — DUT controller.
+  Owns the Genesys USB hub, the MCP23017 solenoid driver at I²C
+  `0x20`, the `/dev/serial/by-id/...` nodes, and any cameras. **The
+  HIL controller service runs here.**
+- **pi5-protomq** (`192.168.1.210`, Pi 5) — ProtoMQ broker (MQTT
+  `1884`) and its web UI (`5173`). DUTs connect to it as MQTT clients
+  during protomq-flavoured tests. The HIL controller talks to it as a
+  read-only observer of the broker's state.
+
+Concretely:
+
+- systemd unit on rpi-displays running `uvicorn
+  hil_controller.main:app` bound to `127.0.0.1`. Caddy or nginx in
+  front terminates TLS and serves the dashboard over the LAN.
 - SQLite file in `/var/lib/hil/` with WAL mode. Daily `sqlite3 .backup`
   to a sibling file; logs and artifacts under `/var/lib/hil/jobs/<id>/`.
 - Devices, pools, and OIDC policy live in `/etc/hil/` as YAML, watched
   for changes and reloaded without a restart.
+- `vendor/usbip-autoattach/server/` installed on rpi-displays (udev
+  rule + `usbip-autobind` helper, `usbipd -D` running). The
+  controller process invokes the client-side reconciliation loop from
+  the same submodule.
 - Single-binary install isn't a goal; this is a Pi-side service
   installed via the package + a deploy script.
 
@@ -585,19 +717,30 @@ Things worth resolving before implementation, in rough priority order:
    Storage cost vs. debuggability.
 6. **Snapper-Python / Snapper-Arduino flashing.** Confirm the exact
    tooling so the flasher adapters can be specced precisely.
-7. **Topology source of truth.** Today, the wiring between a board and
-   its display/sensors is encoded inside the protomq display-v2 test
-   scripts. Two choices: (a) write a one-shot importer that parses
-   those scripts into the new `topology.yaml`, then have us own the
-   manifest going forward; (b) keep the scripts authoritative and have
-   the controller call into them to discover topology at boot. (a)
-   gives us a queryable graph and a dashboard wiring view for free but
-   creates a fork point with the protomq repo; (b) avoids the fork but
-   means the resolver can't reason about availability without
-   executing user code. Recommend (a). Either way, what mux hardware
-   (if any) is currently in the rig — TCA9548, SPI mux, relay
-   crossbar, USB-hub power control — needs confirming so the mux
-   adapters can be specced.
+7. **Topology source of truth.** Wiring info today is split across
+   `vendor/hil-detection/references/hardware.md` (power/reset
+   channels) and `vendor/protomq/scripts/*.json` (device↔display
+   binding + display interface). Recommendation: write the
+   `protomq_scripts.py` and `hardware_md.py` importers, produce a
+   single `topology.yaml` we own from here, and let the importers run
+   periodically as a *drift detector* — they flag when an upstream
+   file disagrees with the manifest, rather than overwriting. Open:
+   does the protomq team want to keep adding new boards via more
+   `scripts/*.json` (and we follow), or should new boards land
+   directly in `topology.yaml`?
+8. **Hil-detection SSH pattern.** `vendor/hil-detection/tests/
+   conftest.py` SSHes from a separate Tachyon host into
+   `rpi-displays` with a **hardcoded password** (`RPI_HOST`,
+   `RPI_PASSWORD` constants). When the controller lands on
+   rpi-displays directly the SSH hop goes away, but until then we
+   either (a) move the password into a `.env` / keyring, (b) switch
+   to key-based auth, or (c) accept the risk on the LAN. Flagging
+   because committing it as-is into a shared repo is a problem
+   regardless of which path we take.
+9. **Channel 3 of the solenoid map** is recorded as `UNCONFIRMED` in
+   `hardware.md` — "does not produce unique device on toggle test".
+   Worth a bench session to either populate or formally retire that
+   channel; the resolver will currently see it as a "missing seat".
 
 ## 16. Milestones
 
