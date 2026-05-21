@@ -49,6 +49,19 @@ fails the right way. See the top of the script for the env contract.
   `docs/ARCHITECTURE.md` §11.1) — single-board computers (Raspberry
   Pi family). Deployed as a Python package + `secrets.json`.
 
-Both speak ProtoMQ; both consume the same `${HIL_PROTOMQ_HOST}` /
-`${HIL_PROTOMQ_PORT}` overrides so a CI matrix can target either with
-the same job payload.
+Both speak ProtoMQ; both accept the same `${HIL_PROTOMQ_HOST}` /
+`${HIL_PROTOMQ_PORT}` placeholders in the caller-side workflow, but
+render them into **different field names** inside the per-variant
+`secrets.json` because the two firmwares parse different keys:
+
+- Arduino — top-level `io_url` (string) and `io_port` (int), per
+  `vendor/wippersnapper-arduino/src/provisioning/ConfigJson.cpp`.
+  Defaults are `io.adafruit.com` and `8883`.
+- Python — different keys, TBC once the (private) Python repo is
+  reachable. The placeholder template in
+  `wippersnapper-python/secrets.example.json` flags this and uses
+  `mqtt_host` / `mqtt_port` as a TODO, not a stable contract.
+
+The caller-side workflow doesn't need to know either set — it just
+exports the `HIL_PROTOMQ_*` env vars and points `envsubst` at the
+matching `secrets.example.json` for the variant being flashed.

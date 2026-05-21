@@ -632,15 +632,21 @@ either with the same job-submission shape.
   Targets microcontrollers (ESP32-S2/S3, SAMD51, RP2040). Flashed via
   esptool / uf2-msc / picotool. Consumes `secrets.json` (`io_username`,
   `io_key`, `network_type_wifi.{network_ssid,network_password}`, plus
-  the bench's `protomq.{host,port}` override). The canonical example
+  the bench's `io_url` / `io_port` overrides — those are the
+  top-level broker-host fields the firmware actually parses, per
+  `vendor/wippersnapper-arduino/src/provisioning/ConfigJson.cpp`,
+  defaulting to `io.adafruit.com` : `8883`). The canonical example
   is `vendor/wippersnapper-arduino/examples/secrets-examples/
   secrets-wifi.json`; this repo's `examples/wippersnapper-arduino/
-  secrets.example.json` extends it with the `protomq` block the
-  controller injects at flash time.
+  secrets.example.json` extends it with the `io_url`/`io_port`
+  overrides the controller fills in at flash time.
 
 - **Python** — single-board-computer client, **currently
-  private/unreleased**. Not vendored. When it opens up, expect the
-  `displays-v2` branch with sub-submodules for `protomq` and
+  private/unreleased**. Not vendored. The Python client uses
+  **different** broker-override field names from the Arduino firmware
+  (not `io_url`/`io_port`); the exact names will be confirmed once
+  the repo is reachable. When it opens up, expect the `displays-v2`
+  branch with sub-submodules for `protomq` and
   `wippersnapper-protobufs`, and a similar config flow (`secrets.json`
   for the long-running client, `.env` for pytest runs). The bench
   already covers the Pi-class targets via the Pi 5 broker host (§13).
