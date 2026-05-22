@@ -13,10 +13,48 @@ examples/
   wippersnapper-python/
     secrets.example.json     # WS Python SBC client secrets
     .env.example             # pytest env loader, same fields
-hil-call.sh                   # reference CI step: submit job + long-poll
+  hil-call.sh                 # reference CI step: submit job + long-poll
+  ws-python-caller.yml        # WS-Python repo drops this in as .github/workflows/hil.yml
+
+.github/workflows/
+  example-hil-call.yml        # generic workflow_dispatch demo, both auth paths
+  ws-python-ci.yml            # reusable workflow_call: pinned WS-Python flow
 ```
 
-## Secrets substitution flow
+## Wippersnapper-Python "every commit" CI
+
+This is the starter case: get HIL display tests running on every push
+to the WS-Python repo. Two pieces:
+
+- `.github/workflows/ws-python-ci.yml` (in *this* repo) — a reusable
+  workflow that owns the job-submission body. Caller passes
+  `repo_owner` / `repo_name` / `caller` (plus an optional `tests`
+  pytest spec and `secrets_profile`); the workflow builds the
+  `git-clone-and-run` job, pins it to the `wippersnapper-python`
+  pool with `device.kind == "sbc"`, submits, and long-polls via the
+  shared `examples/hil-call.sh`.
+- `examples/ws-python-caller.yml` — the matching caller workflow the
+  WS-Python repo drops in as `.github/workflows/hil.yml`. Triggers on
+  `push` / `pull_request` for every-commit CI; `workflow_dispatch`
+  is kept for ad-hoc runs that need a custom pytest spec or a
+  different secrets profile.
+
+The reusable workflow defaults the controller URL to
+`http://wan.gdenu.fi:8080` and the OIDC audience to `hil-controller`,
+so the WS-Python repo can drop the caller workflow in and start
+pushing without setting any Actions vars first. Override
+`HIL_API_BASE` / `HIL_OIDC_AUDIENCE` per-repo if you need a different
+controller. If the controller's OIDC policy already covers the
+repo (recommended), no `HIL_API_TOKEN` is needed either.
+
+Default pytest spec is `tests/display`. Override by passing `tests:`
+on `workflow_dispatch`, or change the default in
+`.github/workflows/ws-python-ci.yml` once the WS-Python test layout
+stabilises. Default setup command is `pip install -e .[test]`;
+override with the `setup_command` input if WS-Python needs something
+different (a JSON array of argv strings).
+
+## Secrets substitution flow (firmware-binary path)
 
 1. Caller stores real values as GitHub Actions secrets in their repo
    (`HIL_IO_USERNAME`, `HIL_IO_KEY`, `HIL_WIFI_SSID`,
