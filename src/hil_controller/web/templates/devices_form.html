@@ -2,7 +2,7 @@
   <h2>{% if device %}Edit Device — {{ device.id }}{% else %}New Device{% endif %}</h2>
   {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
   <form hx-post="/ui/devices{% if device %}/{{ device.id }}{% endif %}"
-        hx-target="#devices-body"
+        hx-target="#form-panel"
         hx-swap="innerHTML">
     <div class="form-grid">
       {% if not device %}

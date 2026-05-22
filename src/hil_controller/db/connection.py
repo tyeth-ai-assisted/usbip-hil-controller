@@ -37,6 +37,13 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         except Exception:
             pass  # column already exists
 
+    # streams_json: list of {url, type} dicts — used by camera aux items.
+    try:
+        await db.execute("ALTER TABLE auxes ADD COLUMN streams_json TEXT")
+        await db.commit()
+    except Exception:
+        pass
+
 
 @asynccontextmanager
 async def get_db(db_path: str) -> AsyncGenerator[aiosqlite.Connection, None]:

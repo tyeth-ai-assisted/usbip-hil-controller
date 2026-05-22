@@ -6,6 +6,11 @@ TOKEN = "test-token-for-ci"
 COOKIE = {"hil_token": TOKEN}
 
 
+def _created(r) -> bool:
+    """Success: either HX-Redirect header (new) or 200 with content (old error path)."""
+    return r.status_code == 200 and ("HX-Redirect" in r.headers or r.text == "")
+
+
 # ---------------------------------------------------------------------------
 # Login / logout
 # ---------------------------------------------------------------------------
@@ -37,12 +42,11 @@ async def test_login_valid_token_sets_cookie_and_redirects(client):
 async def test_logout_clears_cookie(client):
     r = await client.get("/ui/logout", follow_redirects=False)
     assert r.status_code == 303
-    # cookie should be deleted (max-age=0 or expires in past)
     assert "hil_token" in r.headers.get("set-cookie", "")
 
 
 # ---------------------------------------------------------------------------
-# Auth guard — unauthenticated requests redirect to /ui/login
+# Auth guard
 # ---------------------------------------------------------------------------
 
 
@@ -92,7 +96,7 @@ async def test_new_host_form_renders(client):
 
 
 @pytest.mark.asyncio
-async def test_create_host_returns_updated_tbody(client):
+async def test_create_host_returns_hx_redirect(client):
     r = await client.post(
         "/ui/hosts",
         data={
@@ -109,7 +113,7 @@ async def test_create_host_returns_updated_tbody(client):
         cookies=COOKIE,
     )
     assert r.status_code == 200
-    assert "test-host-01" in r.text
+    assert r.headers.get("HX-Redirect") == "/ui/hosts"
 
 
 @pytest.mark.asyncio
@@ -122,11 +126,11 @@ async def test_create_host_missing_id_shows_error(client):
     )
     assert r.status_code == 200
     assert "required" in r.text.lower()
+    assert "HX-Redirect" not in r.headers
 
 
 @pytest.mark.asyncio
 async def test_edit_host_form_renders(client):
-    # create first
     await client.post(
         "/ui/hosts",
         data={"id": "edit-host-01", "role": "sbc-fleet", "addr": "10.0.0.2",
@@ -140,7 +144,7 @@ async def test_edit_host_form_renders(client):
 
 
 @pytest.mark.asyncio
-async def test_update_host_returns_tbody(client):
+async def test_update_host_returns_hx_redirect(client):
     await client.post(
         "/ui/hosts",
         data={"id": "upd-host-01", "role": "sbc-fleet", "addr": "10.0.0.3",
@@ -154,7 +158,7 @@ async def test_update_host_returns_tbody(client):
         cookies=COOKIE,
     )
     assert r.status_code == 200
-    assert "upd-host-01" in r.text
+    assert r.headers.get("HX-Redirect") == "/ui/hosts"
 
 
 @pytest.mark.asyncio
@@ -191,7 +195,6 @@ async def test_new_device_form_renders(client):
 
 @pytest.mark.asyncio
 async def test_create_device(client):
-    # need a host first
     await client.post(
         "/ui/hosts",
         data={"id": "dev-host-01", "role": "microcontroller-fleet", "addr": "10.0.1.1",
@@ -212,7 +215,7 @@ async def test_create_device(client):
         cookies=COOKIE,
     )
     assert r.status_code == 200
-    assert "qtpy-test-01" in r.text
+    assert r.headers.get("HX-Redirect") == "/ui/devices"
 
 
 @pytest.mark.asyncio
@@ -263,7 +266,7 @@ async def test_create_hardware(client):
         cookies=COOKIE,
     )
     assert r.status_code == 200
-    assert "oled-test-01" in r.text
+    assert r.headers.get("HX-Redirect") == "/ui/hardware"
 
 
 @pytest.mark.asyncio
@@ -280,7 +283,7 @@ async def test_delete_hardware(client):
 
 
 # ---------------------------------------------------------------------------
-# Cameras CRUD
+# Cameras CRUD (multi-stream)
 # ---------------------------------------------------------------------------
 
 
@@ -292,29 +295,67 @@ async def test_cameras_page_renders(client):
 
 
 @pytest.mark.asyncio
-async def test_create_camera(client):
+async def test_create_camera_single_stream(client):
     r = await client.post(
         "/ui/cameras",
         data={
             "id": "cam-bench-01",
             "model": "Wyze Cam v3",
-            "interface": "rtsp://192.168.1.50/stream",
-            "observability": "rtsp",
+            "stream_url": "rtsp://192.168.1.50/stream",
+            "stream_type": "rtsp",
             "pool": "public",
             "status": "available",
         },
         cookies=COOKIE,
     )
     assert r.status_code == 200
-    assert "cam-bench-01" in r.text
+    assert r.headers.get("HX-Redirect") == "/ui/cameras"
+
+
+@pytest.mark.asyncio
+async def test_create_camera_multi_stream(client):
+    from urllib.parse import urlencode
+
+    body = urlencode([
+        ("id", "cam-multi-01"), ("model", "PoE Cam"),
+        ("stream_url", "rtsp://192.168.1.51/stream"), ("stream_type", "rtsp"),
+        ("stream_url", "http://192.168.1.51/snapshot.jpg"), ("stream_type", "snapshot"),
+        ("pool", "public"), ("status", "available"),
+    ])
+    r = await client.post(
+        "/ui/cameras",
+        content=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        cookies=COOKIE,
+    )
+    assert r.status_code == 200
+    assert r.headers.get("HX-Redirect") == "/ui/cameras"
+
+    # verify both streams stored
+    cams = await client.get("/v1/aux/cam-multi-01",
+                            headers={"Authorization": f"Bearer {TOKEN}"})
+    assert cams.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_create_camera_no_stream_shows_error(client):
+    r = await client.post(
+        "/ui/cameras",
+        data={"id": "cam-nostream", "model": "test", "pool": "public", "status": "available"},
+        cookies=COOKIE,
+    )
+    assert r.status_code == 200
+    assert "HX-Redirect" not in r.headers
+    assert "required" in r.text.lower()
 
 
 @pytest.mark.asyncio
 async def test_delete_camera(client):
     await client.post(
         "/ui/cameras",
-        data={"id": "del-cam-01", "model": "test", "interface": "rtsp://10.0.0.100",
-              "observability": "rtsp", "pool": "public", "status": "available"},
+        data={"id": "del-cam-01", "model": "test",
+              "stream_url": "rtsp://10.0.0.100", "stream_type": "rtsp",
+              "pool": "public", "status": "available"},
         cookies=COOKIE,
     )
     r = await client.delete("/ui/cameras/del-cam-01", cookies=COOKIE)
@@ -329,7 +370,6 @@ async def test_delete_camera(client):
 
 @pytest.mark.asyncio
 async def test_create_and_delete_connection(client):
-    # setup
     await client.post(
         "/ui/hosts",
         data={"id": "conn-host-01", "role": "microcontroller-fleet", "addr": "10.0.2.1",
@@ -356,7 +396,6 @@ async def test_create_and_delete_connection(client):
     assert r.status_code == 200
     assert "conn-dev-01" in r.text
 
-    # find the connection id from the response
     import re
     m = re.search(r'id="conn-(\d+)"', r.text)
     assert m, "connection id not found in response"
@@ -389,8 +428,7 @@ async def test_scripts_page_with_dir(tmp_path, client):
 
     os.environ["HIL_SCRIPTS_DIR"] = str(tmp_path)
     from hil_controller import config as cfg
-
-    cfg._settings = None  # force re-read
+    cfg._settings = None
 
     try:
         r = await client.get("/ui/scripts", cookies=COOKIE)

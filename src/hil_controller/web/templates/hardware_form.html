@@ -2,7 +2,7 @@
   <h2>{% if aux %}Edit Hardware — {{ aux.id }}{% else %}New Hardware Item{% endif %}</h2>
   {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
   <form hx-post="/ui/hardware{% if aux %}/{{ aux.id }}{% endif %}"
-        hx-target="#hardware-body"
+        hx-target="#form-panel"
         hx-swap="innerHTML">
     <div class="form-grid">
       {% if not aux %}

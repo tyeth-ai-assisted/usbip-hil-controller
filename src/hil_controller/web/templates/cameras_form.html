@@ -2,7 +2,7 @@
   <h2>{% if camera %}Edit Camera — {{ camera.id }}{% else %}New Camera{% endif %}</h2>
   {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
   <form hx-post="/ui/cameras{% if camera %}/{{ camera.id }}{% endif %}"
-        hx-target="#cameras-body"
+        hx-target="#form-panel"
         hx-swap="innerHTML">
     <div class="form-grid">
       {% if not camera %}
@@ -14,19 +14,6 @@
       <div class="form-group">
         <label for="f-cam-model">Model / Label</label>
         <input type="text" id="f-cam-model" name="model" value="{{ camera.model if camera else '' }}" placeholder="Wyze Cam, PoE Cam, …">
-      </div>
-      <div class="form-group">
-        <label for="f-cam-url">URL / Device Path *</label>
-        <input type="text" id="f-cam-url" name="interface" value="{{ camera.interface if camera else '' }}" placeholder="rtsp://192.168.1.50/stream or /dev/video0" required>
-        <span class="form-hint">IP stream URL or local device path</span>
-      </div>
-      <div class="form-group">
-        <label for="f-cam-obs">Stream Type</label>
-        <select id="f-cam-obs" name="observability">
-          {% for o in ['rtsp','mjpeg','snapshot','usb','other'] %}
-          <option value="{{ o }}" {% if camera and camera.observability == o %}selected{% elif not camera and o == 'rtsp' %}selected{% endif %}>{{ o }}</option>
-          {% endfor %}
-        </select>
       </div>
       <div class="form-group">
         <label for="f-cam-pool">Pool</label>
@@ -41,6 +28,25 @@
         </select>
       </div>
     </div>
+
+    <hr class="section-sep">
+    <h2>Streams</h2>
+    <p class="form-hint" style="margin-bottom:0.75rem;">Each stream is a URL + protocol. Add multiple for different consumers (e.g. RTSP for recording, snapshot for web).</p>
+    <div id="streams-list">
+      {% set streams = camera.streams if camera and camera.streams else ([{"url": camera.interface, "type": camera.observability}] if camera and camera.interface else []) %}
+      {% for s in streams %}
+      <div class="stream-row" style="display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;">
+        <select name="stream_type" style="width:110px;flex-shrink:0;">
+          {% for t in ['rtsp','mjpeg','snapshot','usb','other'] %}
+          <option value="{{ t }}" {% if s.type == t or s.get('type') == t %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" name="stream_url" value="{{ s.url or s.get('url','') }}" style="flex:1;" placeholder="rtsp://192.168.1.50/stream or /dev/video0">
+        <button type="button" onclick="this.closest('.stream-row').remove()" class="btn btn-sm btn-danger">×</button>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button" onclick="addStream()" class="btn btn-sm btn-outline" style="margin-bottom:1rem;">+ Add Stream</button>
 
     {% if camera %}
     <hr class="section-sep">
@@ -84,3 +90,19 @@
     </div>
   </form>
 </div>
+
+<script>
+function addStream() {
+  const row = document.createElement('div');
+  row.className = 'stream-row';
+  row.style.cssText = 'display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;';
+  row.innerHTML =
+    '<select name="stream_type" style="width:110px;flex-shrink:0;">' +
+    '<option value="rtsp">rtsp</option><option value="mjpeg">mjpeg</option>' +
+    '<option value="snapshot">snapshot</option><option value="usb">usb</option>' +
+    '<option value="other">other</option></select>' +
+    '<input type="text" name="stream_url" style="flex:1;" placeholder="rtsp://... or http://... or /dev/video0">' +
+    '<button type="button" onclick="this.closest(\'.stream-row\').remove()" class="btn btn-sm btn-danger">×</button>';
+  document.getElementById('streams-list').appendChild(row);
+}
+</script>

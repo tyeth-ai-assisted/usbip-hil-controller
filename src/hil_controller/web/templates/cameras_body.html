@@ -2,8 +2,18 @@
 <tr id="cam-row-{{ c.id }}">
   <td class="mono">{{ c.id }}</td>
   <td>{{ c.model }}</td>
-  <td class="mono">{{ c.interface }}</td>
-  <td><span class="badge badge-info">{{ c.observability }}</span></td>
+  <td>
+    {% if c.streams %}
+      {% for s in c.streams %}
+      <div class="mono" style="font-size:0.72rem;margin-bottom:0.2rem;">
+        <span class="badge badge-info">{{ s.type }}</span> {{ s.url }}
+      </div>
+      {% endfor %}
+    {% else %}
+      <span class="mono" style="font-size:0.72rem;">{{ c.interface }}</span>
+      {% if c.observability %}<span class="badge badge-info">{{ c.observability }}</span>{% endif %}
+    {% endif %}
+  </td>
   <td>
     <div class="caps">
     {% for conn in c.connections %}
@@ -26,8 +36,5 @@
   </td>
 </tr>
 {% else %}
-<tr><td colspan="8" style="color:#6c757d;text-align:center;padding:1.5rem;">No cameras configured — click + Add Camera.</td></tr>
+<tr><td colspan="7" style="color:#6c757d;text-align:center;padding:1.5rem;">No cameras configured — click + Add Camera.</td></tr>
 {% endfor %}
-{% if oob_clear_form is defined and oob_clear_form %}
-<div id="form-panel" hx-swap-oob="innerHTML"></div>
-{% endif %}

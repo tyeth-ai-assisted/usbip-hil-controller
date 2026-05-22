@@ -705,6 +705,22 @@ downstream policy checks against.
 - Suitable for non-GitHub callers (a developer's laptop, a Jenkins job,
   a cron).
 
+**Future: token management web UI (not yet implemented)**
+
+- Superusers (any authenticated user in the initial rollout) should be
+  able to list, create, and revoke tokens from `/ui/tokens` without
+  SSHing into the host and running `mint-token.py`.
+- Each "user" concept is just a label grouping multiple token rows; a
+  person can hold several tokens (e.g. a dev-laptop token and a CI
+  token with different pool/profile scopes).
+- The create flow: fill label + pools + profiles, server calls
+  `mint-token.py` logic internally, shows the plain token once, stores
+  only the hash.
+- Revoke: sets `revoked_at`; the token is rejected on next use.
+- Implementation note: requires a `/v1/tokens` CRUD API (POST, GET,
+  DELETE) guarded by a `manage-tokens` capability, and a
+  `/ui/tokens` page mirroring the hosts/devices admin pattern.
+
 ### 8.2 GitHub Actions OIDC
 
 - CI step requests an OIDC token from GitHub
@@ -737,6 +753,12 @@ downstream policy checks against.
 
 - No long-lived secret on the CI side; revocation is by editing the
   policy file.
+- Org membership gating (Adafruit / adafruitinternaldev): GitHub OIDC
+  tokens carry `repository_owner` as a claim, so gating on
+  `repository_owner: "adafruit"` or `"adafruitinternaldev"` requires no
+  GitHub API call — the claim is in the signed JWT. An allow-list of
+  `repository_owner` values (plus optionally specific repos) in the
+  policy YAML is the recommended approach.  No OAuth app or PAT needed.
 
 Both paths produce a `Principal { kind, subject, repo, allowed_pools,
 allowed_profiles, default_profile, capabilities }` which the job
