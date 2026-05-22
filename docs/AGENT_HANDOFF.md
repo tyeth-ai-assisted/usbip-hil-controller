@@ -12,40 +12,51 @@ out to a fleet of Raspberry Pi HIL hosts. CI calls a long-poll HTTP
 API; the controller routes work to whichever Pi owns the target
 device, runs the test there over SSH, returns pass/fail + artifacts.
 
-**No controller code has been written yet.** Everything in the repo
-so far is design + submodules + CI scaffolding. The next milestone
-that involves shipping Python is M0 / M1 per `docs/ARCHITECTURE.md`
-§16.
-
 ## Current state checklist
 
 Done:
 
-- [x] `docs/ARCHITECTURE.md` — full design v0.1+. Treat as the source
-      of truth. It will likely change before any code is written, but
-      it has been kept *current* with every user decision so far.
+- [x] `docs/ARCHITECTURE.md` — full design v0.1+, milestones updated
+      with [done]/[partial]/[open] status.
 - [x] Four submodules under `vendor/` (see `vendor/README.md`).
 - [x] `scripts/setup-submodules.sh` — idempotent post-clone setup.
-- [x] `examples/` — caller-side templates a downstream repo copies.
-      `hil-call.sh` is the reference long-poll script.
-- [x] `.github/workflows/example-hil-call.yml` — generic
-      `workflow_dispatch` demo covering both auth paths.
-- [x] `.github/workflows/ws-python-ci.yml` — **reusable** workflow
-      pinned to Wippersnapper-Python (SBC, `wippersnapper-python`
-      pool, `git-clone-and-run`, default `-m eink_large`).
-- [x] `examples/ws-python-caller.yml` — caller template the
-      WS-Python repo drops in to wire push-triggered CI.
+- [x] `examples/` — caller-side templates. `hil-call.sh` is the
+      reference long-poll script.
+- [x] `.github/workflows/example-hil-call.yml` — `workflow_dispatch`
+      demo covering both auth paths.
+- [x] `.github/workflows/ws-python-ci.yml` — reusable workflow for
+      Wippersnapper-Python (SBC, `wippersnapper-python` pool,
+      `git-clone-and-run`, default `-m eink_large`).
+- [x] `examples/ws-python-caller.yml` — caller template.
+- [x] **M0** — `pyproject.toml`, FastAPI app, `/healthz`, `/readyz`,
+      `hil-controller-ci.yml` CI (lint + pytest).
+- [x] **M1** — `POST /v1/jobs`, `GET /v1/jobs/{id}`, long-poll
+      `GET /v1/jobs/{id}/wait`, cancel; SQLite jobs + events schema;
+      asyncio scheduler + EventBus; fake adapter worker. 23 tests.
+- [x] **M2 partial** — bearer auth: `HIL_STATIC_TOKEN` env + argon2id
+      DB tokens. `scripts/mint-token.py` CLI.
+- [x] **M3** — `SSHTransport` (asyncssh, key auth).
+      `RealHostRegistry` loads `topology.yaml` and returns SSH adapters.
+- [x] **M4.5** — `GitDeployAdapter` (clone → setup → run → cleanup).
+      Wired to SBC jobs via `git-clone-and-run` script name.
+- [x] `deploy/topology.example.yaml`, systemd unit,
+      `deploy/controller.env.example`.
 
 Not done:
 
-- [ ] Any FastAPI / SQLite / scheduler code. M0–M5 in §16 of the
-      architecture doc.
-- [ ] `deploy/` scripts. Listed in §4 layout, not yet present.
-- [ ] Token-mint utility. **The user has explicitly asked whether to
-      scaffold one ahead of M2** — see "Open ask from the user"
-      below.
-- [ ] The two `topology/importers/` (`protomq_scripts.py`,
-      `hardware_md.py`).
+- [ ] **M1.5** — `/v1/hosts`, `/v1/devices`, `/v1/aux`, `/v1/topology`
+      endpoints; `protomq_scripts.py` and `hardware_md.py` importers.
+- [ ] **M2 remainder** — GitHub OIDC verifier, policy file,
+      `allow_profiles` / `capabilities` gating, audit log.
+- [ ] **M2.5** — secret profiles YAML; per-job secrets materialisation
+      onto HIL host; artifact sanitisation.
+- [ ] **M3.5** — MCU adapter chain (serial capture, esptool, MCP23017).
+- [ ] **M4** — USB-IP, solenoid-hub reset, uf2-msc / picotool flashers,
+      hardcoded-password cleanup (OQ8).
+- [ ] **M5** — ProtoMQ helpers, camera capture, artifact storage,
+      Prometheus metrics, `raw-firmware-smoke` built-in.
+- [ ] HTMX dashboard (queue + device view).
+- [ ] `topology/importers/` (`protomq_scripts.py`, `hardware_md.py`).
 
 ## Working with the user
 
@@ -164,31 +175,13 @@ clarification:
   reusable workflow. Default tests filter is `-m eink_large`;
   default controller URL is `http://wan.gdenu.fi:8080`.
 
-## Open ask from the user (PENDING)
+## Open ask from the user
 
-Last unanswered thing from the user:
+`scripts/mint-token.py` is now implemented (M2 partial). It accepts
+`--db`, `--label`, `--pool`, `--repo`, writes an argon2id hash row,
+and prints the plain `hil_<id>_<secret>` token once.
 
-> we can assume the url of the HIL host system will be
-> http://wan.gdenu.fi:8080/
-
-Then on first API key: I offered to scaffold a
-`scripts/mint-token.py` that writes a token row using the argon2
-hashing scheme from §8.1, ahead of M2's full FastAPI work. **The
-user has not answered yet.** If they come back saying "yes, do
-that", the deliverable is roughly:
-
-- `pyproject.toml` with `argon2-cffi`, `sqlite3` (stdlib), maybe
-  `pydantic-settings`.
-- `src/hil_controller/db/schema.sql` with at minimum a `tokens`
-  table matching the §5 / §8.1 fields.
-- `scripts/mint-token.py` — argparse CLI: `--label`, `--repo`,
-  `--pool`, `--profile`, writes one row, prints the plain
-  `hil_<id>_<secret>` token once.
-- A short note in `examples/README.md` pointing at it.
-
-Get the schema right per the architecture doc (argon2id hash only,
-plain token shown once, `id` prefix routable without table scan)
-because M2 will inherit it.
+Default controller URL confirmed: `http://wan.gdenu.fi:8080`.
 
 ## Decisions already made — don't re-litigate
 

@@ -1268,62 +1268,45 @@ Things worth resolving before implementation, in rough priority order:
 
 ## 16. Milestones
 
-A suggested cut, each landable on its own:
+Status key: **[done]** shipped, **[partial]** partially implemented, **[open]** not started.
 
-- **M0** — repo skeleton, pyproject, FastAPI app, `/healthz`, CI for
-  lint + tests, this doc merged.
-- **M1** — domain model (incl. Host), SQLite schema, in-memory
-  scheduler, fake host transport + fake adapter, end-to-end
-  `POST /v1/jobs` → `wait` → `finished` against the fake. HTMX
-  dashboard shows queue + hosts. No real SSH yet.
-- **M1.5** — topology manifest loader + resolver + `/v1/hosts`,
-  `/v1/devices`, `/v1/aux`, `/v1/topology`, `/v1/topology/resolve`
-  endpoints. Fixed wiring only; mux modelled in the schema but not
-  yet acted on. Run the protomq + hardware-md importers to seed the
-  first manifest with `rpi-displays` and at least one `rpi-hil00N`.
-- **M2** — auth: per-repo bearer tokens + GitHub OIDC verifier,
-  policy file (incl. `allow_profiles`, `default_profile`,
-  `capabilities`), audit log (incl. target host + secrets profile id).
-- **M2.5** — secret profiles (§5.8). `secrets-profiles.yaml`,
-  `${env:...}` resolver, `EnvironmentFile=`-backed value loader,
-  per-job rendering into the controller's scratch dir, sanitisation
-  pass on captured artifacts (§12). Validate with `bench-protomq`
-  only; `live-io-test` / `live-io-prod` profiles configured but
-  unused until M5.
-- **M3** — real **SSH host transport** (`asyncssh`, key auth,
-  known_hosts pinning, connection pool). Smoke test against
-  `rpi-displays` and one `rpi-hil00N`. Per-host health probe.
-  Plumb `max_concurrent_jobs` (per-host semaphore) and
-  `exclusive_host` (per-host write lock) into the scheduler with
-  fake adapters before any real flashing happens.
-- **M3.5** — first real device adapter chain end-to-end against
-  `rpi-displays`: serial capture, esptool flasher, one reset path
-  via the MCP23017. Drive one microcontroller through the full job
-  state machine using the `bench-protomq` profile. Validate
-  `examples/hil-call.sh` + `example-hil-call.yml` against this
-  pipeline. Exercise `exclusive.host: true` (turns on dmesg /
-  usbmon capture) on one debug-flavoured run.
-- **M4** — USB-IP integration via `usbip-autoattach` (server side
-  deployed to rpi-displays via the new `deploy/setup-hil-host.sh`),
-  solenoid-hub reset, mux adapters, per-device locks respecting the
-  connectivity matrix. Add `uf2-msc` and `picotool` flashers so
-  Wippersnapper-Arduino targets work end-to-end alongside esptool.
-  Port `vendor/hil-detection/tests/conftest.py` to drop the
-  hardcoded password (open question 8).
-- **M4.5** — SBC fan-out: drive one `rpi-hil00N` SBC DUT end-to-end
-  via the `GitDeploy` adapter (§10.2). Clone + ref + setup-command
-  + render `secrets.json` from the chosen profile + run the
-  caller's entry point. Land the `git-clone-and-run` built-in
-  script (§11). SBC host concurrency cap of 1 enforced by the
-  M3 scheduler bits.
-- **M5** — ProtoMQ test helpers; camera capture (with per-host
-  pull-back over the transport); artifact storage; Prometheus
-  metrics; the `raw-firmware-smoke` permissive built-in for
-  trusted-firmware callers (§11); turn on `live-io-test` and
-  `live-io-prod` profiles for the policies that need them (open
-  question 16 settled by then). Land the Python Wippersnapper
-  submodule if/when it's reachable (open question 10).
+- **M0** [done] — pyproject, FastAPI app factory, `/healthz` `/readyz`, SQLite init,
+  `hil-controller-ci.yml` CI. Branch: `claude/m0-m1-hil-controller-impl`.
 
-Past M5 we revisit dynamic hardware switching, GitHub check-run
-posting, and the SSH → agent transport upgrade (open question 11)
-based on what we've learned.
+- **M1** [done] — jobs, events SQLite schema; `POST /v1/jobs`, `GET /v1/jobs/{id}`,
+  `GET /v1/jobs/{id}/wait` long-poll, `POST /v1/jobs/{id}/cancel`; in-process asyncio
+  scheduler + EventBus; fake adapter worker driving the full state machine.
+  23 unit tests pass (TDD). HTMX dashboard not yet built.
+
+- **M1.5** [open] — topology manifest resolver; `/v1/hosts`, `/v1/devices`,
+  `/v1/aux`, `/v1/topology`, `/v1/topology/resolve` endpoints. `protomq_scripts.py`
+  and `hardware_md.py` importers.
+
+- **M2** [partial] — bearer-token auth implemented: static bootstrap token
+  (`HIL_STATIC_TOKEN` env) and argon2id DB tokens via `scripts/mint-token.py`.
+  GitHub OIDC verifier, policy file, and audit log not yet implemented.
+
+- **M2.5** [open] — secret profiles YAML; `${env:...}` resolver;
+  per-job secrets materialisation onto the HIL host; sanitisation pass.
+
+- **M3** [done] — `SSHTransport` (`asyncssh`, key auth, per-call connections).
+  `RealHostRegistry` loads `topology.yaml` and returns SSH-backed adapters.
+  Known-hosts pinning and connection pooling deferred (open question 11).
+
+- **M3.5** [open] — first real MCU adapter chain against `rpi-displays`:
+  serial capture, esptool flasher, MCP23017 reset. Exercise `exclusive.host`.
+
+- **M4** [open] — USB-IP via `usbip-autoattach`, solenoid-hub reset,
+  `uf2-msc` + `picotool` flashers, hardcoded-password cleanup (OQ8).
+
+- **M4.5** [done] — `GitDeployAdapter` (clone → setup → run → cleanup over SSH),
+  `RealHostRegistry.get_adapter` wires it to SBC jobs via `git-clone-and-run`.
+  `deploy/topology.example.yaml` seeds the first SBC host config.
+
+- **M5** [open] — ProtoMQ helpers; camera capture; artifact storage; Prometheus
+  `/metrics`; `raw-firmware-smoke` permissive built-in; `live-io-test` /
+  `live-io-prod` profiles; Python Wippersnapper submodule (OQ10).
+
+Past M5 we revisit dynamic hardware switching, GitHub check-run posting,
+and the SSH → agent transport upgrade (open question 11) based on what
+we've learned.
