@@ -44,8 +44,8 @@ on:
         description: |
           Pytest spec passed to `python -m pytest`. Examples:
           "tests/display", "-m display", "-k 'display and not slow'",
-          "tests/test_st7701.py::test_basic_init". Empty means the
-          WS-Python default display suite (tests/display).
+          "tests/test_st7701.py::test_basic_init". Empty falls back to
+          the workflow default below (largest E-ink only for now).
         required: false
         type: string
         default: ""
@@ -125,24 +125,35 @@ jobs:
           SETUP_INPUT: ${{ inputs.setup_command }}
           RUN_URL: ${{ github.server_url }}/${{ inputs.repo_owner }}/${{ inputs.repo_name }}/actions/runs/${{ github.run_id }}
         run: |
-          tests="${TESTS_INPUT:-tests/display}"
+          # Default scope: only the largest E-ink display tests until
+          # the rest of the bench is wired up. WS-Python should mark
+          # the relevant tests with `@pytest.mark.eink_large` and
+          # register the marker in pyproject.toml / pytest.ini. Pass
+          # `tests:` explicitly to override.
+          #
+          # shlex-split via Python so multi-token specs and quoted
+          # forms (e.g. -k 'display and not slow') survive correctly
+          # as a JSON array of argv strings. Reads TESTS_INPUT from
+          # the environment to keep the shell quoting straightforward.
+          tests_argv=$(python3 -c 'import json, os, shlex; spec = os.environ.get("TESTS_INPUT") or "-m eink_large"; print(json.dumps(shlex.split(spec)))')
+
           if [ -n "$SETUP_INPUT" ]; then
-            setup="$SETUP_INPUT"
+            setup_argv="$SETUP_INPUT"
           else
-            setup='["pip", "install", "-e", ".[test]"]'
+            setup_argv='["pip", "install", "-e", ".[test]"]'
           fi
 
           jq -n \
-            --arg owner   "${{ inputs.repo_owner }}" \
-            --arg name    "${{ inputs.repo_name }}" \
-            --arg ref     "$REF" \
-            --arg tests   "$tests" \
-            --arg caller  "${{ inputs.caller }}" \
-            --arg model   "${{ inputs.device_model }}" \
-            --arg profile "${{ inputs.secrets_profile }}" \
-            --arg runurl  "$RUN_URL" \
-            --argjson tot "${{ inputs.timeout_s }}" \
-            --argjson setup "$setup" \
+            --arg owner       "${{ inputs.repo_owner }}" \
+            --arg name        "${{ inputs.repo_name }}" \
+            --arg ref         "$REF" \
+            --argjson tests   "$tests_argv" \
+            --arg caller      "${{ inputs.caller }}" \
+            --arg model       "${{ inputs.device_model }}" \
+            --arg profile     "${{ inputs.secrets_profile }}" \
+            --arg runurl      "$RUN_URL" \
+            --argjson tot     "${{ inputs.timeout_s }}" \
+            --argjson setup   "$setup_argv" \
             '{
               target: {
                 device: { kind: "sbc", model: $model },
@@ -151,7 +162,7 @@ jobs:
               script: "git-clone-and-run",
               params: {
                 entry: "python",
-                args:  ["-m", "pytest", $tests, "-v"]
+                args:  (["-m", "pytest"] + $tests + ["-v"])
               },
               payload: {
                 kind: "git-source",
