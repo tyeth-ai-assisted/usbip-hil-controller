@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     upnp_enabled: bool = False
     upnp_lease_seconds: int = 3600
 
+    # Path to vendor/protomq/scripts/ for the web scripts browser.  Empty = disabled.
+    scripts_dir: str = ""
+
 
 _settings: Settings | None = None
 

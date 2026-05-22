@@ -1,0 +1,67 @@
+<div class="form-panel">
+  <h2>{% if host %}Edit Host — {{ host.id }}{% else %}New Host{% endif %}</h2>
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+  <form hx-post="/ui/hosts{% if host %}/{{ host.id }}{% endif %}"
+        hx-target="#hosts-body"
+        hx-swap="innerHTML">
+    <div class="form-grid">
+      {% if not host %}
+      <div class="form-group">
+        <label for="f-host-id">ID *</label>
+        <input type="text" id="f-host-id" name="id" value="{{ host.id if host else '' }}" required placeholder="rpi-hil001">
+        <span class="form-hint">Unique slug, no spaces</span>
+      </div>
+      {% endif %}
+      <div class="form-group">
+        <label for="f-host-role">Role *</label>
+        <select id="f-host-role" name="role">
+          {% for r in ['sbc-fleet','microcontroller-fleet','protomq-broker'] %}
+          <option value="{{ r }}" {% if (host and host.role == r) or (not host and r == 'sbc-fleet') %}selected{% endif %}>{{ r }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="f-host-addr">Address</label>
+        <input type="text" id="f-host-addr" name="addr" value="{{ host.addr if host else '' }}" placeholder="192.168.1.10 or hostname.local">
+      </div>
+      <div class="form-group">
+        <label for="f-host-transport">Transport *</label>
+        <select id="f-host-transport" name="transport">
+          {% for t in ['ssh','local','none'] %}
+          <option value="{{ t }}" {% if host and host.transport == t %}selected{% elif not host and t == 'ssh' %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="f-host-ssh-user">SSH User</label>
+        <input type="text" id="f-host-ssh-user" name="ssh_user" value="{{ host.ssh_user if host else 'pi' }}" placeholder="pi">
+      </div>
+      <div class="form-group">
+        <label for="f-host-ssh-key">SSH Key Path</label>
+        <input type="text" id="f-host-ssh-key" name="ssh_key_path" value="{{ host.ssh_key_path or '' if host else '' }}" placeholder="/etc/hil/keys/rpi-hil001">
+      </div>
+      <div class="form-group">
+        <label for="f-host-max">Max Concurrent Jobs</label>
+        <input type="number" id="f-host-max" name="max_concurrent_jobs" value="{{ host.max_concurrent_jobs or '' if host else '' }}" placeholder="blank = unlimited" min="1">
+      </div>
+      <div class="form-group">
+        <label for="f-host-caps">Capabilities</label>
+        <input type="text" id="f-host-caps" name="capabilities" value="{{ (host.capabilities | join(', ')) if host else '' }}" placeholder="cameras, usbip-server">
+        <span class="form-hint">Comma-separated</span>
+      </div>
+      <div class="form-group">
+        <label for="f-host-status">Status</label>
+        <select id="f-host-status" name="status">
+          {% for s in ['available','offline','maintenance'] %}
+          <option value="{{ s }}" {% if host and host.status == s %}selected{% elif not host and s == 'available' %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{% if host %}Save Changes{% else %}Create Host{% endif %}</button>
+      <button type="button" class="btn btn-secondary"
+        hx-get="/ui/empty" hx-target="#form-panel" hx-swap="innerHTML">Cancel</button>
+    </div>
+  </form>
+</div>

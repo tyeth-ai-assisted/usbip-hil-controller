@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -65,12 +66,15 @@ def create_app(db_path: str | None = None, topology_file: str | None = None) -> 
         lifespan=lifespan,
     )
 
+    from fastapi.staticfiles import StaticFiles
+
     from hil_controller.api.aux import router as aux_router
     from hil_controller.api.devices import router as devices_router
     from hil_controller.api.health import router as health_router
     from hil_controller.api.hosts import router as hosts_router
     from hil_controller.api.jobs import router as jobs_router
     from hil_controller.api.topology import router as topology_router
+    from hil_controller.web.router import router as web_router
 
     app.include_router(health_router)
     app.include_router(jobs_router)
@@ -78,6 +82,10 @@ def create_app(db_path: str | None = None, topology_file: str | None = None) -> 
     app.include_router(devices_router)
     app.include_router(aux_router)
     app.include_router(topology_router)
+    app.include_router(web_router)
+
+    _static = Path(__file__).parent / "web" / "static"
+    app.mount("/ui/static", StaticFiles(directory=str(_static)), name="ui-static")
 
     return app
 

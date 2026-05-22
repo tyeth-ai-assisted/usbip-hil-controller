@@ -1,0 +1,75 @@
+<div class="form-panel">
+  <h2>{% if device %}Edit Device — {{ device.id }}{% else %}New Device{% endif %}</h2>
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+  <form hx-post="/ui/devices{% if device %}/{{ device.id }}{% endif %}"
+        hx-target="#devices-body"
+        hx-swap="innerHTML">
+    <div class="form-grid">
+      {% if not device %}
+      <div class="form-group">
+        <label for="f-dev-id">ID *</label>
+        <input type="text" id="f-dev-id" name="id" value="" required placeholder="qtpy-s3-01">
+      </div>
+      {% endif %}
+      <div class="form-group">
+        <label for="f-dev-host">Host *</label>
+        <select id="f-dev-host" name="host_id" required>
+          <option value="">— select host —</option>
+          {% for h in hosts %}
+          <option value="{{ h.id }}" {% if device and device.host_id == h.id %}selected{% endif %}>{{ h.id }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="f-dev-kind">Kind *</label>
+        <select id="f-dev-kind" name="kind">
+          {% for k in ['microcontroller','sbc'] %}
+          <option value="{{ k }}" {% if device and device.kind == k %}selected{% elif not device and k == 'microcontroller' %}selected{% endif %}>{{ k }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="f-dev-model">Model</label>
+        <input type="text" id="f-dev-model" name="model" value="{{ device.model if device else '' }}" placeholder="esp32-s3, pi5, …">
+      </div>
+      <div class="form-group">
+        <label for="f-dev-pool">Pool</label>
+        <input type="text" id="f-dev-pool" name="pool" value="{{ device.pool if device else 'public' }}" placeholder="public, wippersnapper-python, …">
+      </div>
+      <div class="form-group">
+        <label for="f-dev-caps">Capabilities</label>
+        <input type="text" id="f-dev-caps" name="capabilities" value="{{ (device.capabilities | join(', ')) if device else '' }}" placeholder="spi, i2c, linux, …">
+        <span class="form-hint">Comma-separated</span>
+      </div>
+      <div class="form-group">
+        <label for="f-dev-serial">Serial Port</label>
+        <input type="text" id="f-dev-serial" name="serial_port" value="{{ device.serial_port or '' if device else '' }}" placeholder="/dev/ttyACM0">
+      </div>
+      <div class="form-group">
+        <label for="f-dev-flasher">Flasher</label>
+        <input type="text" id="f-dev-flasher" name="flasher" value="{{ device.flasher or '' if device else '' }}" placeholder="esptool, uf2-msc, …">
+      </div>
+      <div class="form-group">
+        <label for="f-dev-usb-vid">USB VID</label>
+        <input type="text" id="f-dev-usb-vid" name="usb_vid" value="{{ device.usb_vid or '' if device else '' }}" placeholder="239a">
+      </div>
+      <div class="form-group">
+        <label for="f-dev-usb-pid">USB PID</label>
+        <input type="text" id="f-dev-usb-pid" name="usb_pid" value="{{ device.usb_pid or '' if device else '' }}" placeholder="8143">
+      </div>
+      <div class="form-group">
+        <label for="f-dev-status">Status</label>
+        <select id="f-dev-status" name="status">
+          {% for s in ['available','offline','maintenance','busy'] %}
+          <option value="{{ s }}" {% if device and device.status == s %}selected{% elif not device and s == 'available' %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{% if device %}Save Changes{% else %}Create Device{% endif %}</button>
+      <button type="button" class="btn btn-secondary"
+        hx-get="/ui/empty" hx-target="#form-panel" hx-swap="innerHTML">Cancel</button>
+    </div>
+  </form>
+</div>

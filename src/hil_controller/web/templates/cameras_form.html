@@ -1,0 +1,86 @@
+<div class="form-panel">
+  <h2>{% if camera %}Edit Camera — {{ camera.id }}{% else %}New Camera{% endif %}</h2>
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+  <form hx-post="/ui/cameras{% if camera %}/{{ camera.id }}{% endif %}"
+        hx-target="#cameras-body"
+        hx-swap="innerHTML">
+    <div class="form-grid">
+      {% if not camera %}
+      <div class="form-group">
+        <label for="f-cam-id">ID *</label>
+        <input type="text" id="f-cam-id" name="id" value="" required placeholder="cam-bench-01">
+      </div>
+      {% endif %}
+      <div class="form-group">
+        <label for="f-cam-model">Model / Label</label>
+        <input type="text" id="f-cam-model" name="model" value="{{ camera.model if camera else '' }}" placeholder="Wyze Cam, PoE Cam, …">
+      </div>
+      <div class="form-group">
+        <label for="f-cam-url">URL / Device Path *</label>
+        <input type="text" id="f-cam-url" name="interface" value="{{ camera.interface if camera else '' }}" placeholder="rtsp://192.168.1.50/stream or /dev/video0" required>
+        <span class="form-hint">IP stream URL or local device path</span>
+      </div>
+      <div class="form-group">
+        <label for="f-cam-obs">Stream Type</label>
+        <select id="f-cam-obs" name="observability">
+          {% for o in ['rtsp','mjpeg','snapshot','usb','other'] %}
+          <option value="{{ o }}" {% if camera and camera.observability == o %}selected{% elif not camera and o == 'rtsp' %}selected{% endif %}>{{ o }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="f-cam-pool">Pool</label>
+        <input type="text" id="f-cam-pool" name="pool" value="{{ camera.pool if camera else 'public' }}">
+      </div>
+      <div class="form-group">
+        <label for="f-cam-status">Status</label>
+        <select id="f-cam-status" name="status">
+          {% for s in ['available','offline','maintenance'] %}
+          <option value="{{ s }}" {% if camera and camera.status == s %}selected{% elif not camera and s == 'available' %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    {% if camera %}
+    <hr class="section-sep">
+    <h2>Watching Devices</h2>
+    <div id="cam-conn-list" style="margin-bottom:0.75rem;">
+      {% for conn in camera.connections %}
+      <div id="conn-{{ conn.id }}" style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.4rem;">
+        <span class="badge badge-sbc">{{ conn.device_id or '(no device)' }}</span>
+        <button type="button" class="btn btn-sm btn-danger"
+          hx-delete="/ui/connections/{{ conn.id }}"
+          hx-target="#conn-{{ conn.id }}"
+          hx-swap="outerHTML">Remove</button>
+      </div>
+      {% else %}
+      <p style="color:#6c757d;font-size:0.8rem;">Not watching any device yet.</p>
+      {% endfor %}
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap;">
+      <div class="form-group" style="min-width:180px;">
+        <label>Watch device</label>
+        <select id="cam-device-sel">
+          <option value="">— select device —</option>
+          {% for d in devices %}
+          <option value="{{ d.id }}">{{ d.id }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="button" class="btn btn-success btn-sm"
+        hx-post="/ui/connections"
+        hx-vals='js:{aux_id: "{{ camera.id }}", device_id: document.getElementById("cam-device-sel").value}'
+        hx-target="#cam-conn-list"
+        hx-swap="outerHTML">Assign</button>
+    </div>
+    {% endif %}
+
+    <hr class="section-sep" style="margin-top:1rem;">
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{% if camera %}Save Changes{% else %}Create Camera{% endif %}</button>
+      <button type="button" class="btn btn-secondary"
+        hx-get="/ui/empty" hx-target="#form-panel" hx-swap="innerHTML">Cancel</button>
+    </div>
+  </form>
+</div>

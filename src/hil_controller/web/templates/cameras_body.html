@@ -1,0 +1,33 @@
+{% for c in cameras %}
+<tr id="cam-row-{{ c.id }}">
+  <td class="mono">{{ c.id }}</td>
+  <td>{{ c.model }}</td>
+  <td class="mono">{{ c.interface }}</td>
+  <td><span class="badge badge-info">{{ c.observability }}</span></td>
+  <td>
+    <div class="caps">
+    {% for conn in c.connections %}
+      {% if conn.device_id %}<span class="badge badge-sbc">{{ conn.device_id }}</span>{% endif %}
+    {% endfor %}
+    </div>
+  </td>
+  <td>{{ c.pool }}</td>
+  <td><span class="badge {% if c.status == 'available' %}badge-ok{% else %}badge-warn{% endif %}">{{ c.status }}</span></td>
+  <td>
+    <button class="btn btn-sm btn-outline"
+      hx-get="/ui/cameras/{{ c.id }}/form"
+      hx-target="#form-panel"
+      hx-swap="innerHTML">Edit</button>
+    <button class="btn btn-sm btn-danger"
+      hx-delete="/ui/cameras/{{ c.id }}"
+      hx-target="#cam-row-{{ c.id }}"
+      hx-swap="outerHTML"
+      hx-confirm="Delete camera {{ c.id }}?">Del</button>
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="8" style="color:#6c757d;text-align:center;padding:1.5rem;">No cameras configured — click + Add Camera.</td></tr>
+{% endfor %}
+{% if oob_clear_form is defined and oob_clear_form %}
+<div id="form-panel" hx-swap-oob="innerHTML"></div>
+{% endif %}

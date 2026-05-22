@@ -1,0 +1,28 @@
+{% for h in hosts %}
+<tr id="host-row-{{ h.id }}">
+  <td class="mono">{{ h.id }}</td>
+  <td><span class="badge badge-info">{{ h.role }}</span></td>
+  <td class="mono">{{ h.addr }}</td>
+  <td>{{ h.transport }}</td>
+  <td class="mono" style="font-size:0.73rem;">{{ h.ssh_user }}{% if h.ssh_key_path %} / {{ h.ssh_key_path }}{% endif %}</td>
+  <td>{{ h.max_concurrent_jobs if h.max_concurrent_jobs is not none else '∞' }}</td>
+  <td><div class="caps">{% for c in h.capabilities %}<span class="badge badge-gray">{{ c }}</span>{% endfor %}</div></td>
+  <td><span class="badge {% if h.status == 'available' %}badge-ok{% else %}badge-warn{% endif %}">{{ h.status }}</span></td>
+  <td>
+    <button class="btn btn-sm btn-outline"
+      hx-get="/ui/hosts/{{ h.id }}/form"
+      hx-target="#form-panel"
+      hx-swap="innerHTML">Edit</button>
+    <button class="btn btn-sm btn-danger"
+      hx-delete="/ui/hosts/{{ h.id }}"
+      hx-target="#host-row-{{ h.id }}"
+      hx-swap="outerHTML"
+      hx-confirm="Delete host {{ h.id }}?">Del</button>
+  </td>
+</tr>
+{% else %}
+<tr id="hosts-empty"><td colspan="9" style="color:#6c757d;text-align:center;padding:1.5rem;">No hosts — click + Add Host to create one.</td></tr>
+{% endfor %}
+{% if oob_clear_form is defined and oob_clear_form %}
+<div id="form-panel" hx-swap-oob="innerHTML"></div>
+{% endif %}
