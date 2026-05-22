@@ -77,9 +77,9 @@ class Scheduler:
             adapter=adapter,
             event_bus=self.event_bus,
             script=request.get("script", "git-clone-and-run"),
-            params=request.get("params", {}),
-            payload=request.get("payload", {}),
-            timeouts=request.get("timeouts", {"total_s": 1800}),
+            params=request.get("params") or {},
+            payload=request.get("payload") or {},
+            timeouts=request.get("timeouts") or {"total_s": 1800},
             db_path=self.db_path,
         )
         self._active[job_id] = asyncio.current_task()  # type: ignore[assignment]
