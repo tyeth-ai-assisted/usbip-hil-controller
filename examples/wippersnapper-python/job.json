@@ -17,7 +17,13 @@
   },
   "params": {
     "entry": "python",
-    "args": ["-m", "pytest", "-m", "not hardware", "-v", "--tb=short"]
+    "args": ["-m", "pytest", "-m", "not hardware", "-v", "--tb=short"],
+    "protomq": {
+      "broker_host": "pi5-protomq.local",
+      "mqtt_port": 1884,
+      "api_port": 5173,
+      "script": "pi5-eyespi-beret-ili9341-240x320-demo"
+    }
   },
   "secrets_profile": "bench-protomq",
   "timeouts": {

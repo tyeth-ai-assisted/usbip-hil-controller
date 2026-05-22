@@ -98,6 +98,44 @@ async def test_deploy_injects_pat_into_clone_url(mock_transport):
 
 
 @pytest.mark.asyncio
+async def test_run_stores_stdout_and_stderr(git_deploy, mock_transport):
+    mock_transport.exec.return_value = make_exec_result(0, stdout="2 passed\n", stderr="warnings\n")
+    await git_deploy.run()
+    assert git_deploy._run_stdout == "2 passed\n"
+    assert git_deploy._run_stderr == "warnings\n"
+
+
+@pytest.mark.asyncio
+async def test_deploy_stores_clone_stderr(mock_transport):
+    adapter = GitDeployAdapter(
+        transport=mock_transport,
+        job_id="job-stderr",
+        source={"repo": "https://github.com/adafruit/Wippersnapper_Python.git", "ref": "main"},
+        params={},
+    )
+    mock_transport.exec.return_value = make_exec_result(0, stderr="Cloning into...\n")
+    await adapter.deploy()
+    assert "Cloning" in adapter._deploy_stderr
+
+
+@pytest.mark.asyncio
+async def test_deploy_stores_setup_stdout(mock_transport):
+    adapter = GitDeployAdapter(
+        transport=mock_transport,
+        job_id="job-setup",
+        source={
+            "repo": "https://github.com/adafruit/Wippersnapper_Python.git",
+            "ref": "main",
+            "setup": ["pip", "install", "-e", ".[test]"],
+        },
+        params={},
+    )
+    mock_transport.exec.return_value = make_exec_result(0, stdout="Successfully installed\n")
+    await adapter.deploy()
+    assert "Successfully installed" in adapter._deploy_stdout
+
+
+@pytest.mark.asyncio
 async def test_deploy_no_pat_uses_plain_url(mock_transport):
     adapter = GitDeployAdapter(
         transport=mock_transport,

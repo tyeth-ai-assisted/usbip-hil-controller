@@ -29,7 +29,15 @@ def create_app(db_path: str | None = None, topology_file: str | None = None) -> 
         await seed_topology(_db_path, _topology_file)
 
         event_bus = EventBus()
-        scheduler = Scheduler(db_path=_db_path, event_bus=event_bus)
+
+        host_registry = None
+        if _topology_file:
+            from hil_controller.hosts.registry import RealHostRegistry
+
+            host_registry = RealHostRegistry(topology_file=_topology_file, db_path=_db_path)
+            host_registry.load()
+
+        scheduler = Scheduler(db_path=_db_path, event_bus=event_bus, host_registry=host_registry)
         await scheduler.start()
 
         app.state.db_path = _db_path

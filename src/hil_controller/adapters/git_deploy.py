@@ -35,6 +35,10 @@ class GitDeployAdapter:
         self.params = params
         self.work_dir = work_dir or PurePosixPath(f"/tmp/hil/{job_id}")
         self.secrets_dest = secrets_dest
+        self._deploy_stdout: str = ""
+        self._deploy_stderr: str = ""
+        self._run_stdout: str = ""
+        self._run_stderr: str = ""
 
     async def acquire(self) -> None:
         pass
@@ -56,6 +60,9 @@ class GitDeployAdapter:
     # ---------------------------------------------------------------------- #
 
     async def deploy(self) -> None:
+        self._deploy_stdout = ""
+        self._deploy_stderr = ""
+
         repo = self.source["repo"]
         pat = self.source.get("pat")
         if pat and repo.startswith("https://"):
@@ -76,12 +83,15 @@ class GitDeployAdapter:
             clone_cmd += ["--recurse-submodules"]
         clone_cmd += ["--branch", ref, repo, str(self.work_dir)]
         result = await self.transport.exec(clone_cmd)
+        self._deploy_stderr += result.stderr
         if result.exit_status != 0:
             raise RuntimeError(f"git clone failed (exit {result.exit_status}): {result.stderr}")
 
         # setup command (e.g. pip install)
         if setup:
             result = await self.transport.exec(setup, cwd=str(self.work_dir))
+            self._deploy_stdout += result.stdout
+            self._deploy_stderr += result.stderr
             if result.exit_status != 0:
                 log.warning("setup command exited %d: %s", result.exit_status, result.stderr)
 
@@ -91,7 +101,9 @@ class GitDeployAdapter:
         argv = [entry] + list(args)
 
         result = await self.transport.exec(argv, cwd=str(self.work_dir))
-        log.info("test exit %d stdout=%s stderr=%s", result.exit_status, result.stdout[:200], result.stderr[:200])
+        self._run_stdout = result.stdout
+        self._run_stderr = result.stderr
+        log.info("test exit %d", result.exit_status)
         return "pass" if result.exit_status == 0 else "fail"
 
     async def cleanup(self) -> None:

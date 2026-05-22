@@ -1,7 +1,7 @@
 """M1 tests: in-process scheduler and fake worker."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -71,3 +71,167 @@ async def test_worker_runs_fake_adapter_to_finish(event_bus, fake_adapter):
     assert result.result in ("pass", "fail", "error")
     assert "running" in states or "finished" in states
     event_bus.unsubscribe("j1", on_event)
+
+
+# --------------------------------------------------------------------------- #
+# Log event emission from adapter output                                        #
+# --------------------------------------------------------------------------- #
+
+
+class _RunAdapter:
+    """Minimal adapter that exposes captured run output."""
+
+    def __init__(self, stdout: str = "", stderr: str = "", outcome: str = "pass") -> None:
+        self._run_stdout = stdout
+        self._run_stderr = stderr
+        self._outcome = outcome
+
+    async def acquire(self) -> None:
+        pass
+
+    async def release(self) -> None:
+        pass
+
+    async def run(self) -> str:
+        return self._outcome
+
+
+@pytest.mark.asyncio
+async def test_worker_emits_stdout_as_log_event(event_bus):
+    log_events = []
+
+    async def on_event(ev):
+        if ev.get("kind") == "log":
+            log_events.append(ev)
+
+    event_bus.subscribe("j-log1", on_event)
+    worker = JobWorker(
+        job_id="j-log1",
+        adapter=_RunAdapter(stdout="2 passed\n"),
+        event_bus=event_bus,
+        script="pytest-suite",
+        params={},
+        payload={},
+        timeouts={"total_s": 30},
+    )
+    result = await worker.run()
+    event_bus.unsubscribe("j-log1", on_event)
+
+    assert result.state == "finished"
+    assert any(
+        e["payload"].get("stream") == "stdout" and "2 passed" in e["payload"].get("msg", "")
+        for e in log_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_emits_stderr_as_log_event(event_bus):
+    log_events = []
+
+    async def on_event(ev):
+        if ev.get("kind") == "log":
+            log_events.append(ev)
+
+    event_bus.subscribe("j-log2", on_event)
+    worker = JobWorker(
+        job_id="j-log2",
+        adapter=_RunAdapter(stderr="DeprecationWarning\n"),
+        event_bus=event_bus,
+        script="pytest-suite",
+        params={},
+        payload={},
+        timeouts={"total_s": 30},
+    )
+    await worker.run()
+    event_bus.unsubscribe("j-log2", on_event)
+
+    assert any(
+        e["payload"].get("stream") == "stderr" and "DeprecationWarning" in e["payload"].get("msg", "")
+        for e in log_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_no_log_events_when_output_empty(event_bus):
+    log_events = []
+
+    async def on_event(ev):
+        if ev.get("kind") == "log":
+            log_events.append(ev)
+
+    event_bus.subscribe("j-log3", on_event)
+    worker = JobWorker(
+        job_id="j-log3",
+        adapter=_RunAdapter(stdout="", stderr=""),
+        event_bus=event_bus,
+        script="pytest-suite",
+        params={},
+        payload={},
+        timeouts={"total_s": 30},
+    )
+    await worker.run()
+    event_bus.unsubscribe("j-log3", on_event)
+
+    stdout_events = [e for e in log_events if e["payload"].get("stream") == "stdout"]
+    assert stdout_events == []
+
+
+# --------------------------------------------------------------------------- #
+# ProtoMQ observer integration                                                  #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_worker_activates_protomq_script_when_configured(event_bus):
+    """Observer.activate_script is called with the script name from params."""
+    log_events = []
+
+    async def on_event(ev):
+        log_events.append(ev)
+
+    event_bus.subscribe("j-pmq1", on_event)
+
+    mock_obs = AsyncMock()
+    mock_obs.activate_script = AsyncMock(return_value={"status": "OK"})
+    mock_obs.observe = AsyncMock(return_value=None)
+    mock_obs.get_script_status = AsyncMock(return_value={"active_script": "demo", "completed_steps": ["checkin-response"]})
+    mock_obs.deactivate = AsyncMock()
+
+    # _start_protomq_observer does a local import, so patch at the source module
+    with patch("hil_controller.adapters.protomq_observer.ProtoMQObserver", return_value=mock_obs):
+        worker = JobWorker(
+            job_id="j-pmq1",
+            adapter=_RunAdapter(stdout="1 passed"),
+            event_bus=event_bus,
+            script="pytest-suite",
+            params={
+                "protomq": {
+                    "broker_host": "pi5-proto.local",
+                    "script": "my-demo",
+                }
+            },
+            payload={},
+            timeouts={"total_s": 30},
+        )
+        await worker.run()
+
+    event_bus.unsubscribe("j-pmq1", on_event)
+
+    mock_obs.activate_script.assert_awaited_once_with("my-demo")
+
+
+@pytest.mark.asyncio
+async def test_worker_skips_protomq_when_no_script_configured(event_bus):
+    """No observer is created when params.protomq.script is absent."""
+    with patch("hil_controller.adapters.protomq_observer.ProtoMQObserver") as MockCls:
+        worker = JobWorker(
+            job_id="j-pmq2",
+            adapter=_RunAdapter(),
+            event_bus=event_bus,
+            script="pytest-suite",
+            params={},
+            payload={},
+            timeouts={"total_s": 30},
+        )
+        await worker.run()
+        MockCls.assert_not_called()
