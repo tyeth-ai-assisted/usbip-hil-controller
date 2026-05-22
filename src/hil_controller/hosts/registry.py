@@ -136,6 +136,14 @@ class RealHostRegistry(HostRegistry):
         secrets = request.get("secrets", {})
         secrets_format = params.get("secrets_format", "env")
 
+        if not source:
+            from hil_controller.adapters.shell_script import ShellScriptAdapter
+
+            return ShellScriptAdapter(
+                transport=transport,
+                script=request.get("script", "true"),
+            )
+
         return GitDeployAdapter(
             transport=transport,
             job_id=job_id,
