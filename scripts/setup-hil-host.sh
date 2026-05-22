@@ -61,6 +61,20 @@ for grp in "${GROUPS_NEEDED[@]}"; do
     fi
 done
 
+# udev rules — ensure non-root access to hardware devices
+# SPI: on Tachyon (and many Linux SBCs) spidev is root-only by default.
+# Adafruit_Wippersnapper_Python README mandates this rule for Tachyon users.
+UDEV_SPI=/etc/udev/rules.d/99-spi.rules
+UDEV_SPI_RULE='SUBSYSTEM=="spidev", GROUP="plugdev", MODE="0660"'
+if [[ -f "$UDEV_SPI" ]] && grep -qF "$UDEV_SPI_RULE" "$UDEV_SPI"; then
+    echo "  udev SPI rule already present"
+else
+    echo "$UDEV_SPI_RULE" > "$UDEV_SPI"
+    echo "  udev SPI rule written to $UDEV_SPI"
+fi
+udevadm trigger
+echo "  udevadm trigger done"
+
 # Install SSH authorized key
 HOME_DIR="$(getent passwd "$HIL_USER" | cut -d: -f6)"
 SSH_DIR="$HOME_DIR/.ssh"
