@@ -7,7 +7,7 @@
   "payload": {
     "kind": "git-source",
     "source": {
-      "repo": "https://github.com/adafruit/Wippersnapper_Python.git",
+      "repo": "https://github.com/adafruit/Adafruit_Wippersnapper_Python.git",
       "ref": "main",
       "shallow": true,
       "submodules": false,
