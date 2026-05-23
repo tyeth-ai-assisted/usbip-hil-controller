@@ -1010,6 +1010,10 @@ def _build_job_request(
     device_id: str,
     requires_aux: str,
     secrets_profile: str,
+    mqtt_host: str,
+    mqtt_port: str,
+    io_username: str,
+    io_key: str,
     timeout_total: int,
     timeout_run: int,
     timeout_deploy: int,
@@ -1029,16 +1033,17 @@ def _build_job_request(
     if requires_aux:
         target["requires"] = [{"id": requires_aux}]
 
+    _mqtt_port = int(mqtt_port) if mqtt_port.strip().isdigit() else 1884
     params: dict = {
         "entry": "python",
         "args": full_args,
         "secrets_format": "dotenv",
         "extra_env": extra_env,
     }
-    if protomq_script:
+    if protomq_script and mqtt_host:
         params["protomq"] = {
-            "broker_host": "127.0.0.1",
-            "mqtt_port": 1884,
+            "broker_host": mqtt_host,
+            "mqtt_port": _mqtt_port,
             "api_port": 5173,
             "script": protomq_script,
         }
@@ -1053,11 +1058,18 @@ def _build_job_request(
     if pat:
         source["pat"] = pat
 
+    secrets: dict = {"MQTT_HOST": mqtt_host, "MQTT_PORT": str(_mqtt_port)}
+    if io_username:
+        secrets["IO_USERNAME"] = io_username
+    if io_key:
+        secrets["IO_KEY"] = io_key
+
     return {
         "target": target,
         "script": "pytest-suite",
         "payload": {"kind": "git-source", "source": source},
         "params": params,
+        "secrets": secrets,
         "secrets_profile": secrets_profile,
         "timeouts": {
             "total_s": timeout_total,
@@ -1131,6 +1143,10 @@ async def submit_job_form(
     device_id: Annotated[str, Form()] = "",
     requires_aux: Annotated[str, Form()] = "",
     secrets_profile: Annotated[str, Form()] = "bench-protomq",
+    mqtt_host: Annotated[str, Form()] = "127.0.0.1",
+    mqtt_port: Annotated[str, Form()] = "1884",
+    io_username: Annotated[str, Form()] = "",
+    io_key: Annotated[str, Form()] = "",
     timeout_total: Annotated[str, Form()] = "600",
     timeout_run: Annotated[str, Form()] = "300",
     timeout_deploy: Annotated[str, Form()] = "180",
@@ -1148,8 +1164,9 @@ async def submit_job_form(
         "repo": repo, "ref": ref, "pat": pat, "setup": setup,
         "submodules": bool(submodules), "hw_mode": hw_mode, "test_args": test_args,
         "protomq_script": protomq_script, "device_id": device_id, "requires_aux": requires_aux,
-        "secrets_profile": secrets_profile, "timeout_total": timeout_total,
-        "timeout_run": timeout_run, "timeout_deploy": timeout_deploy,
+        "secrets_profile": secrets_profile, "mqtt_host": mqtt_host, "mqtt_port": mqtt_port,
+        "io_username": io_username, "io_key": io_key,
+        "timeout_total": timeout_total, "timeout_run": timeout_run, "timeout_deploy": timeout_deploy,
     }
 
     if not repo:
@@ -1167,6 +1184,8 @@ async def submit_job_form(
             hw_mode=hw_mode, test_args=test_args,
             protomq_script=protomq_script, device_id=device_id,
             requires_aux=requires_aux, secrets_profile=secrets_profile,
+            mqtt_host=mqtt_host, mqtt_port=mqtt_port,
+            io_username=io_username, io_key=io_key,
             timeout_total=int(timeout_total or 600),
             timeout_run=int(timeout_run or 300),
             timeout_deploy=int(timeout_deploy or 180),

@@ -114,12 +114,45 @@
   </div>
 
   <div class="form-panel">
+    <h2>MQTT / Secrets</h2>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;">
+      <button type="button" class="btn btn-sm btn-outline" onclick="applyPreset('local-anon')">Local ProtoMQ (anon)</button>
+      <button type="button" class="btn btn-sm btn-outline" onclick="applyPreset('local-auth')">Local ProtoMQ (auth)</button>
+      <button type="button" class="btn btn-sm btn-outline" onclick="applyPreset('production')">io.adafruit.com</button>
+      <button type="button" class="btn btn-sm btn-outline" onclick="applyPreset('staging')">io.adafruit.us (staging)</button>
+    </div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label for="mqtt_host">MQTT Host</label>
+        <input type="text" id="mqtt_host" name="mqtt_host"
+          value="{{ form.mqtt_host if form else '127.0.0.1' }}" placeholder="127.0.0.1">
+      </div>
+      <div class="form-group">
+        <label for="mqtt_port">MQTT Port</label>
+        <input type="number" id="mqtt_port" name="mqtt_port"
+          value="{{ form.mqtt_port if form else '1884' }}" placeholder="1884" min="1" max="65535">
+      </div>
+      <div class="form-group">
+        <label for="io_username">IO Username</label>
+        <input type="text" id="io_username" name="io_username"
+          value="{{ form.io_username if form else '' }}" placeholder="leave blank for anonymous">
+      </div>
+      <div class="form-group">
+        <label for="io_key">IO Key</label>
+        <input type="password" id="io_key" name="io_key"
+          value="{{ form.io_key if form else '' }}" placeholder="aio_… or blank for anonymous">
+      </div>
+    </div>
+  </div>
+
+  <div class="form-panel">
     <h2>Advanced</h2>
     <div class="form-grid">
       <div class="form-group">
-        <label for="secrets_profile">Secrets profile</label>
+        <label for="secrets_profile">Secrets profile label</label>
         <input type="text" id="secrets_profile" name="secrets_profile"
           value="{{ form.secrets_profile if form else 'bench-protomq' }}">
+        <span class="form-hint">Used for token authorization gating only</span>
       </div>
       <div class="form-group">
         <label for="timeout_total">Total timeout (s)</label>
@@ -148,6 +181,24 @@
 <script>
 const HW_ARGS = {{ defaults.hw_args | tojson | safe }};
 const SW_ARGS = {{ defaults.no_hw_args | tojson | safe }};
+
+const PRESETS = {
+  'local-anon':  {host: '127.0.0.1', port: '1884', user: '', key: ''},
+  'local-auth':  {host: '127.0.0.1', port: '1884', user: '', key: ''},
+  'production':  {host: 'io.adafruit.com', port: '1883', user: '', key: ''},
+  'staging':     {host: 'io.adafruit.us',  port: '1883', user: '', key: ''},
+};
+function applyPreset(name) {
+  const p = PRESETS[name];
+  if (!p) return;
+  document.getElementById('mqtt_host').value = p.host;
+  document.getElementById('mqtt_port').value = p.port;
+  // only clear credentials for anon; leave existing values for auth presets
+  if (name === 'local-anon') {
+    document.getElementById('io_username').value = '';
+    document.getElementById('io_key').value = '';
+  }
+}
 
 function onHwMode(val) {
   const argsEl = document.getElementById('test_args');
