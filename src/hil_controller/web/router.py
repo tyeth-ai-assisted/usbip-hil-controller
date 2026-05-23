@@ -1266,7 +1266,7 @@ async def rerun_job(
         new_id = resp["id"]
     except Exception as exc:
         return HTMLResponse(f'<div class="alert alert-error">{html.escape(str(exc))}</div>')
-    return Response(status_code=200, headers={"HX-Redirect": f"/ui/jobs/{new_id}"})
+    return RedirectResponse(f"/ui/jobs/{new_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/jobs/{job_id}/cancel", include_in_schema=False, response_model=None)
@@ -1283,7 +1283,7 @@ async def cancel_job_web(
             f"/v1/jobs/{job_id}/cancel",
             headers={"Authorization": f"Bearer {hil_token}"},
         )
-    return Response(status_code=200, headers={"HX-Redirect": f"/ui/jobs/{job_id}"})
+    return RedirectResponse(f"/ui/jobs/{job_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------
