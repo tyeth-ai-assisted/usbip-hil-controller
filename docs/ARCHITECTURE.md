@@ -1477,3 +1477,36 @@ Status key: **[done]** shipped, **[partial]** partially implemented, **[open]** 
 Past M5 we revisit dynamic hardware switching, GitHub check-run posting,
 and the SSH → agent transport upgrade (open question 11) based on what
 we've learned.
+
+## 17. Planned features (deferred)
+
+### 17.1 Multi-stage job: clone → discover → run
+
+Rather than submitting a single monolithic job, a "staged job" flow would:
+
+1. **Stage 1 — Clone**: clone the repo to `jobs_dir/{ts}_{job_id}/source/`, run
+   `pytest --collect-only -q`, and emit the discovered test list as a `metadata`
+   event on the job.
+2. **Stage 2 — Configure**: the web UI presents the collected test list so the
+   user can select a subset, confirm env vars, and trigger the run.  The staged
+   job persists between stages (new state `awaiting-config`).
+3. **Stage 3 — Run**: execute the chosen tests, streaming logs as normal.  All
+   three stages share the same `job_id`; their outputs are stored under
+   `jobs_dir/{ts}_{job_id}/` with timestamp-prefixed sub-directories.
+
+**Re-triggering**: a completed staged job can be re-run from any stage — the
+clone is reused if the ref matches, or re-cloned otherwise.
+
+**Implementation notes**:
+- Requires new job states: `awaiting-config` (between stages 1 and 2).
+- The scheduler must handle `awaiting-config` as a pause point (not a terminal
+  state); a `POST /v1/jobs/{id}/configure` endpoint resumes it.
+- `jobs_dir` (env `HIL_JOBS_DIR`) controls where clones land locally (for
+  `LocalTransport`); SSH-based jobs still clone to the remote host's `/tmp/hil/`.
+- The web UI at `GET /ui/jobs/{id}/configure` shows collected tests and lets the
+  user confirm before resuming.
+
+### 17.2 Token management web UI
+
+See §8.1 for the full design note.  Implementation requires `/v1/tokens` CRUD API
+guarded by `manage-tokens` capability, and a `/ui/tokens` admin page.

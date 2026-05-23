@@ -2,6 +2,13 @@
 {% block content %}
 <h1>New Python Test Job</h1>
 
+{% if disk.pct_used > 70 %}
+<div class="alert {% if disk.pct_used > 85 %}alert-error{% else %}alert-info{% endif %}" style="margin-bottom:1rem;">
+  Disk: {{ disk.free_fmt }} free ({{ disk.pct_used }}% used)
+  {% if disk.pct_used > 85 %} — consider <a href="/ui/assets">purging assets</a>{% endif %}
+</div>
+{% endif %}
+
 {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
 
 <form method="post" action="/ui/jobs" style="max-width:900px;">
@@ -87,8 +94,8 @@
       <div class="form-group" style="grid-column:span 2;">
         <label for="test_args">Pytest arguments</label>
         <input type="text" id="test_args" name="test_args"
-          value="{{ form.test_args if form else '-m &quot;not hardware&quot; -v --tb=short' }}"
-          placeholder="-m &quot;not hardware&quot; -v --tb=short">
+          value="{{ form.test_args if form else defaults.no_hw_args }}"
+          placeholder="-m 'not hardware' -v --tb=short">
         <span class="form-hint">Everything after <code>python -m pytest</code>. Shell-split, so quoting works.</span>
       </div>
       <div class="form-group" id="protomq-row">
@@ -139,8 +146,8 @@
 </form>
 
 <script>
-const HW_ARGS = '-m "display or hardware" -v --tb=short';
-const SW_ARGS = '-m "not hardware" -v --tb=short';
+const HW_ARGS = {{ defaults.hw_args | tojson | safe }};
+const SW_ARGS = {{ defaults.no_hw_args | tojson | safe }};
 
 function onHwMode(val) {
   const argsEl = document.getElementById('test_args');

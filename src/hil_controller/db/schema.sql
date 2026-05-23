@@ -92,6 +92,22 @@ CREATE TABLE IF NOT EXISTS connections (
     mux_channel TEXT
 );
 
+CREATE TABLE IF NOT EXISTS assets (
+    id          TEXT PRIMARY KEY,
+    filename    TEXT NOT NULL,
+    path        TEXT NOT NULL DEFAULT '',
+    url         TEXT,
+    size_bytes  INTEGER NOT NULL DEFAULT 0,
+    kind        TEXT NOT NULL DEFAULT 'firmware',  -- firmware | log | artifact
+    job_id      TEXT,
+    created_at  TEXT NOT NULL,
+    purge_at    TEXT,
+    purged_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_assets_job ON assets(job_id);
+CREATE INDEX IF NOT EXISTS idx_assets_kind ON assets(kind);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     at          TEXT NOT NULL,

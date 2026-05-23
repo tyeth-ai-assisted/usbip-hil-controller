@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # Path to vendor/protomq/scripts/ for the web scripts browser.  Empty = disabled.
     scripts_dir: str = ""
 
+    # Local directory for job assets (uploaded firmware, artifacts).  Defaults to
+    # a jobs/ subdirectory next to the DB.
+    jobs_dir: str = ""
+
 
 _settings: Settings | None = None
 

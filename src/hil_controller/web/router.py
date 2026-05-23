@@ -6,11 +6,13 @@ import html
 import json
 import logging
 import shlex
+import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Form, Request, status
+from fastapi import APIRouter, Cookie, File, Form, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -932,6 +934,52 @@ def _render_events(events: list[dict]) -> str:
     return "\n".join(lines) if lines else '<span style="color:#6c757d;font-size:0.8rem;">No output yet.</span>'
 
 
+_JOB_DEFAULTS = {
+    "no_hw_args": '-m "not hardware" -v --tb=short',
+    "hw_args": '-m "display or hardware" -v --tb=short',
+}
+
+
+def _fmt_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024  # type: ignore[assignment]
+    return f"{n:.1f} PB"
+
+
+def _disk_info(path: str = "") -> dict:
+    try:
+        p = path or "/"
+        u = shutil.disk_usage(p)
+        pct = int(100 * u.used / u.total) if u.total else 0
+        return {"total_fmt": _fmt_bytes(u.total), "free_fmt": _fmt_bytes(u.free),
+                "used_fmt": _fmt_bytes(u.used), "pct_used": pct, "free": u.free}
+    except Exception:
+        return {"total_fmt": "?", "free_fmt": "?", "used_fmt": "?", "pct_used": 0, "free": 0}
+
+
+def _jobs_dir() -> str:
+    from hil_controller.config import get_settings
+    cfg = get_settings()
+    if cfg.jobs_dir:
+        return cfg.jobs_dir
+    db = cfg.db_path
+    return str(Path(db).parent / "jobs") if db else "/tmp/hil-jobs"
+
+
+async def _asset_rows(db_path: str) -> list[dict]:
+    async with get_db(db_path) as db:
+        async with db.execute("SELECT * FROM assets ORDER BY created_at DESC") as cur:
+            rows = await cur.fetchall()
+    result = []
+    for r in rows:
+        a = dict(r)
+        a["size_fmt"] = _fmt_bytes(a.get("size_bytes") or 0)
+        result.append(a)
+    return result
+
+
 async def _call_jobs_api(request: Request, job_request: dict, token: str) -> dict:
     """Submit a job via the internal /v1/jobs API and return the response dict."""
     from httpx import ASGITransport, AsyncClient
@@ -1028,7 +1076,8 @@ async def jobs_page(
         return _login_redirect()
     db_path: str = request.app.state.db_path
     jobs = await _job_rows(db_path)
-    return _tr(request, "jobs.html", {"token": hil_token, "active": "jobs", "jobs": jobs})
+    return _tr(request, "jobs.html", {"token": hil_token, "active": "jobs", "jobs": jobs,
+                                       "disk": _disk_info(_jobs_dir())})
 
 
 @router.get("/jobs/list", response_class=HTMLResponse, include_in_schema=False)
@@ -1060,6 +1109,8 @@ async def new_job_page(
         "active": "jobs",
         "sbc_devices": sbc_devices,
         "scripts": scripts,
+        "defaults": _JOB_DEFAULTS,
+        "disk": _disk_info(_jobs_dir()),
         "form": None,
         "error": None,
     })
@@ -1105,6 +1156,7 @@ async def submit_job_form(
         return _tr(request, "job_new.html", {
             "token": hil_token, "active": "jobs",
             "sbc_devices": sbc_devices, "scripts": scripts,
+            "defaults": _JOB_DEFAULTS, "disk": _disk_info(_jobs_dir()),
             "form": form_vals, "error": "Repository URL is required",
         })
 
@@ -1125,6 +1177,7 @@ async def submit_job_form(
         return _tr(request, "job_new.html", {
             "token": hil_token, "active": "jobs",
             "sbc_devices": sbc_devices, "scripts": scripts,
+            "defaults": _JOB_DEFAULTS, "disk": _disk_info(_jobs_dir()),
             "form": form_vals, "error": str(exc),
         })
 
@@ -1212,3 +1265,244 @@ async def cancel_job_web(
             headers={"Authorization": f"Bearer {hil_token}"},
         )
     return Response(status_code=200, headers={"HX-Redirect": f"/ui/jobs/{job_id}"})
+
+
+# ---------------------------------------------------------------------------
+# Assets
+# ---------------------------------------------------------------------------
+
+
+@router.get("/assets", response_class=HTMLResponse, include_in_schema=False)
+async def assets_page(
+    request: Request, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    assets = await _asset_rows(db_path)
+    jdir = _jobs_dir()
+    total_bytes = sum(a.get("size_bytes") or 0 for a in assets if not a.get("purged_at"))
+    eligible = sum(1 for a in assets if not a.get("purged_at") and a.get("purge_at"))
+    return _tr(request, "assets.html", {
+        "token": hil_token,
+        "active": "assets",
+        "assets": assets,
+        "total_size": _fmt_bytes(total_bytes),
+        "purge_eligible": eligible,
+        "disk": _disk_info(jdir),
+    })
+
+
+@router.delete("/assets/{asset_id}", response_class=HTMLResponse, include_in_schema=False)
+async def purge_asset(
+    request: Request, asset_id: str, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        async with db.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return HTMLResponse("", status_code=404)
+        path = row["path"]
+        if path and Path(path).exists():
+            try:
+                Path(path).unlink()
+            except Exception:
+                pass
+        await db.execute(
+            "UPDATE assets SET purged_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), asset_id),
+        )
+        await db.commit()
+    return HTMLResponse("")
+
+
+@router.post("/assets/purge-eligible", response_class=HTMLResponse, include_in_schema=False)
+async def purge_eligible(
+    request: Request, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    now = datetime.now(timezone.utc).isoformat()
+    async with get_db(db_path) as db:
+        async with db.execute(
+            "SELECT id, path FROM assets WHERE purge_at IS NOT NULL AND purge_at <= ? AND purged_at IS NULL",
+            (now,),
+        ) as cur:
+            rows = await cur.fetchall()
+        for r in rows:
+            if r["path"] and Path(r["path"]).exists():
+                try:
+                    Path(r["path"]).unlink()
+                except Exception:
+                    pass
+            await db.execute("UPDATE assets SET purged_at = ? WHERE id = ?", (now, r["id"]))
+        await db.commit()
+    assets = await _asset_rows(db_path)
+    return _tr(request, "assets_body.html", {"assets": assets})
+
+
+# ---------------------------------------------------------------------------
+# Arduino job
+# ---------------------------------------------------------------------------
+
+
+@router.get("/jobs/new-arduino", response_class=HTMLResponse, include_in_schema=False)
+async def new_arduino_job_page(
+    request: Request, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    mcu_devices = [d for d in await _devices(db_path) if d["kind"] == "microcontroller"]
+    assets = await _asset_rows(db_path)
+    recent_assets = [a for a in assets if a["kind"] == "firmware" and not a.get("purged_at")][:10]
+    return _tr(request, "job_new_arduino.html", {
+        "token": hil_token,
+        "active": "jobs",
+        "mcu_devices": mcu_devices,
+        "recent_assets": recent_assets,
+        "disk": _disk_info(_jobs_dir()),
+        "form": None,
+        "error": None,
+    })
+
+
+@router.post("/jobs/arduino", include_in_schema=False, response_model=None)
+async def submit_arduino_job(
+    request: Request,
+    hil_token: str = Cookie(default=""),
+    firmware_source: Annotated[str, Form()] = "url",
+    firmware_url: Annotated[str, Form()] = "",
+    reuse_asset_id: Annotated[str, Form()] = "",
+    flasher: Annotated[str, Form()] = "esptool",
+    flash_args: Annotated[str, Form()] = "",
+    purge_days: Annotated[str, Form()] = "30",
+    device_id: Annotated[str, Form()] = "",
+    pool: Annotated[str, Form()] = "public",
+    timeout_flash: Annotated[str, Form()] = "120",
+    timeout_total: Annotated[str, Form()] = "300",
+    firmware_file: UploadFile | None = File(default=None),
+) -> Response:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+
+    db_path: str = request.app.state.db_path
+    mcu_devices = [d for d in await _devices(db_path) if d["kind"] == "microcontroller"]
+    assets = await _asset_rows(db_path)
+    recent_assets = [a for a in assets if a["kind"] == "firmware" and not a.get("purged_at")][:10]
+    jdir = _jobs_dir()
+
+    form_vals = {
+        "firmware_source": firmware_source, "firmware_url": firmware_url,
+        "reuse_asset_id": reuse_asset_id, "flasher": flasher, "flash_args": flash_args,
+        "purge_days": purge_days, "device_id": device_id, "pool": pool,
+        "timeout_flash": timeout_flash, "timeout_total": timeout_total,
+    }
+
+    def _err(msg: str) -> HTMLResponse:
+        return _tr(request, "job_new_arduino.html", {
+            "token": hil_token, "active": "jobs",
+            "mcu_devices": mcu_devices, "recent_assets": recent_assets,
+            "disk": _disk_info(jdir), "form": form_vals, "error": msg,
+        })
+
+    asset_id: str | None = None
+    resolved_url: str = ""
+    resolved_path: str = ""
+
+    if firmware_source == "upload":
+        if reuse_asset_id:
+            # reuse existing asset
+            async with get_db(db_path) as db:
+                async with db.execute("SELECT * FROM assets WHERE id = ?", (reuse_asset_id,)) as cur:
+                    existing = await cur.fetchone()
+            if not existing:
+                return _err("Selected asset not found")
+            asset_id = existing["id"]
+            resolved_path = existing["path"]
+            resolved_url = existing["url"] or ""
+        elif firmware_file and firmware_file.filename:
+            # save uploaded file
+            aid = str(uuid.uuid4())
+            save_dir = Path(jdir) / "firmware" / aid
+            save_dir.mkdir(parents=True, exist_ok=True)
+            dest = save_dir / firmware_file.filename
+            content = await firmware_file.read()
+            dest.write_bytes(content)
+            size = len(content)
+            days = int(purge_days or 0)
+            purge_at = None
+            if days:
+                from datetime import timedelta
+                purge_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+            async with get_db(db_path) as db:
+                await db.execute(
+                    """INSERT INTO assets (id, filename, path, size_bytes, kind, job_id, created_at, purge_at)
+                       VALUES (?, ?, ?, ?, 'firmware', NULL, ?, ?)""",
+                    (aid, firmware_file.filename, str(dest), size,
+                     datetime.now(timezone.utc).isoformat(), purge_at),
+                )
+                await db.commit()
+            asset_id = aid
+            resolved_path = str(dest)
+        else:
+            return _err("Select a file to upload or choose a previously uploaded firmware")
+    else:
+        if not firmware_url:
+            return _err("Firmware URL is required")
+        # store as URL-only asset (no local file)
+        aid = str(uuid.uuid4())
+        fname = Path(firmware_url.split("?")[0]).name or "firmware.bin"
+        async with get_db(db_path) as db:
+            await db.execute(
+                """INSERT INTO assets (id, filename, url, size_bytes, kind, job_id, created_at)
+                   VALUES (?, ?, ?, 0, 'firmware', NULL, ?)""",
+                (aid, fname, firmware_url, datetime.now(timezone.utc).isoformat()),
+            )
+            await db.commit()
+        asset_id = aid
+        resolved_url = firmware_url
+
+    target: dict = {"pool": pool}
+    if device_id:
+        target["device"] = {"id": device_id}
+    else:
+        target["device"] = {"kind": "microcontroller"}
+
+    extra_flash = shlex.split(flash_args) if flash_args.strip() else []
+    job_req = {
+        "target": target,
+        "script": "firmware-flash",
+        "payload": {
+            "kind": "firmware-binary",
+            "source": {
+                "asset_id": asset_id,
+                "url": resolved_url,
+                "path": resolved_path,
+                "flasher": flasher,
+            },
+        },
+        "params": {"flasher": flasher, "flash_args": extra_flash},
+        "timeouts": {
+            "total_s": int(timeout_total or 300),
+            "flash_s": int(timeout_flash or 120),
+            "run_s": 60,
+            "deploy_s": 60,
+        },
+    }
+
+    try:
+        resp = await _call_jobs_api(request, job_req, hil_token)
+        job_id = resp["id"]
+        # link asset to job
+        async with get_db(db_path) as db:
+            await db.execute("UPDATE assets SET job_id = ? WHERE id = ?", (job_id, asset_id))
+            await db.commit()
+    except Exception as exc:
+        return _err(str(exc))
+
+    return RedirectResponse(f"/ui/jobs/{job_id}", status_code=status.HTTP_303_SEE_OTHER)
