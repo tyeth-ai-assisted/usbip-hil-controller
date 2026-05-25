@@ -97,26 +97,20 @@
           Camera: <strong>{{ device.camera_id }}</strong><br>
           {% if device.qr_identifier %}QR: <code style="font-size:0.75rem;">{{ device.qr_identifier }}</code>{% endif %}
         </p>
-        <div id="cam-roi-status-{{ device.id }}"
-             hx-get="/v1/devices/{{ device.id }}/camera"
-             hx-trigger="load"
-             hx-swap="innerHTML">
-          Loading ROI…
+        <div id="cam-roi-status-{{ device.id }}">
+          {% if roi %}
+            ROI: x={{ roi.x }} y={{ roi.y }} w={{ roi.w }} h={{ roi.h }} ({{ roi.source }})
+          {% else %}
+            No ROI set
+          {% endif %}
         </div>
         <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
           {% if device.qr_identifier %}
           <button type="button" class="btn btn-sm btn-outline"
-            hx-post="/v1/devices/{{ device.id }}/camera/calibrate/save"
-            hx-target="#cam-roi-status-{{ device.id }}"
-            hx-headers='{"Authorization": "Bearer {{ token }}"}'
-            hx-swap="innerHTML">Re-detect QR</button>
+            onclick="detectQr('{{ device.id }}', '{{ token }}')">Re-detect QR</button>
           {% endif %}
           <button type="button" class="btn btn-sm btn-danger"
-            hx-delete="/v1/devices/{{ device.id }}/camera/roi"
-            hx-target="#cam-roi-status-{{ device.id }}"
-            hx-headers='{"Authorization": "Bearer {{ token }}"}'
-            hx-confirm="Clear manual ROI for {{ device.id }}?"
-            hx-swap="innerHTML">Clear ROI</button>
+            onclick="clearRoi('{{ device.id }}', '{{ token }}')">Clear ROI</button>
         </div>
 
         <hr style="margin:0.75rem 0;border-color:#eee;">
@@ -143,6 +137,9 @@
 </div>
 
 <script>
+function _roiEl(deviceId) { return document.getElementById('cam-roi-status-' + deviceId); }
+function _roiText(d) { return 'ROI: x=' + d.x + ' y=' + d.y + ' w=' + d.w + ' h=' + d.h + ' (' + (d.source||'manual') + ')'; }
+
 async function saveRoi(deviceId, token) {
   const g = id => parseInt(document.getElementById(id).value, 10);
   const x = g('roi-x-' + deviceId), y = g('roi-y-' + deviceId);
@@ -156,12 +153,26 @@ async function saveRoi(deviceId, token) {
     headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
     body: JSON.stringify({x, y, w, h}),
   });
-  const el = document.getElementById('cam-roi-status-' + deviceId);
-  if (r.ok) {
-    const d = await r.json();
-    el.textContent = 'ROI set: x=' + d.x + ' y=' + d.y + ' w=' + d.w + ' h=' + d.h + ' (manual)';
-  } else {
-    el.textContent = 'Error: ' + (await r.text());
-  }
+  const el = _roiEl(deviceId);
+  el.textContent = r.ok ? _roiText(await r.json()) : 'Error: ' + (await r.text());
+}
+
+async function detectQr(deviceId, token) {
+  const el = _roiEl(deviceId);
+  el.textContent = 'Detecting QR…';
+  const r = await fetch('/v1/devices/' + deviceId + '/camera/calibrate/save', {
+    method: 'POST',
+    headers: {'Authorization': 'Bearer ' + token},
+  });
+  el.textContent = r.ok ? _roiText(await r.json()) : 'Error: ' + (await r.text());
+}
+
+async function clearRoi(deviceId, token) {
+  if (!confirm('Clear ROI for ' + deviceId + '?')) return;
+  const r = await fetch('/v1/devices/' + deviceId + '/camera/roi', {
+    method: 'DELETE',
+    headers: {'Authorization': 'Bearer ' + token},
+  });
+  _roiEl(deviceId).textContent = r.ok ? 'No ROI set' : 'Error: ' + (await r.text());
 }
 </script>

@@ -434,6 +434,10 @@ async def edit_device_form(
     async with get_db(db_path) as db:
         async with db.execute("SELECT * FROM devices WHERE id = ?", (device_id,)) as cur:
             row = await cur.fetchone()
+        async with db.execute(
+            "SELECT * FROM camera_rois WHERE device_id = ?", (device_id,)
+        ) as cur:
+            roi_row = await cur.fetchone()
     if row is None:
         return HTMLResponse("Device not found", status_code=404)
     d = dict(row)
@@ -442,7 +446,8 @@ async def edit_device_form(
     d["usb_vid"] = usb.get("vid", "")
     d["usb_pid"] = usb.get("pid", "")
     hosts = await _hosts(db_path)
-    return _tr(request, "devices_form.html", {"device": d, "hosts": hosts, "token": hil_token})
+    roi = dict(roi_row) if roi_row else None
+    return _tr(request, "devices_form.html", {"device": d, "hosts": hosts, "token": hil_token, "roi": roi})
 
 
 @router.post("/devices", response_class=HTMLResponse, include_in_schema=False)
