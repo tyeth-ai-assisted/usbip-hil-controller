@@ -39,7 +39,7 @@ ProtoMQ observer wired into worker: started as concurrent asyncio Task during ru
 cancelled after test, completed steps emitted. Configured via `params.protomq.{broker_host,
 mqtt_port, api_port, script}`.
 
-**134 tests pass, 0 failures.** (as of 2026-05-23, commit b71a2f7)
+**181 tests pass, 0 failures.** (as of 2026-05-25, commit bf04757)
 
 **HTMX web UI (done 2026-05-23):**
 `/ui/` — Jinja2/HTMX admin interface served from `src/hil_controller/web/`.
@@ -48,16 +48,34 @@ mqtt_port, api_port, script}`.
 - Hosts CRUD: add/edit/delete inline
 - Devices CRUD: add/edit/delete, kind filter (microcontroller/sbc)
 - Hardware/Aux CRUD with connection management (which Adafruit product is on which device)
-- Cameras CRUD (aux kind=camera; interface=URL for IP cams)
+- Cameras CRUD (new cameras table; streams_json; host_id for v4l2; notes)
 - ProtoMQ script browser (set `HIL_SCRIPTS_DIR` to vendor/protomq/scripts/)
 - Static files at /ui/static/app.css; HTMX from CDN unpkg
+
+**Camera integration (done 2026-05-25, commit bf04757):**
+`adapters/camera/` — standalone library ported from tyeth/protomq PR#1.
+- calibration.py: compute_scale(), transform_roi() (pure math, no cv2)
+- frame_extractor.py: Frame dataclass, extract_distinct_frames(), _classify_change()
+- qr_locator.py: BoundingBox, scan_qr_codes(), segment_board_roi() (GrabCut→Otsu→padding)
+- recorder.py: VideoRecorder (background thread, cv2 VideoWriter)
+- report.py: generate_report() HTML
+- sources.py: CameraSource protocol, IPCamera (HTTP), V4L2Camera (Phase 2 stub)
+- monitor.py: ROI dataclass, CameraMonitor (thread-safe frame→crop loop)
+- capture.py: CameraCapture, ROIStore protocol, CameraArtifacts
+
+DB schema additions: cameras table, camera_rois table, camera_id+qr_identifier on devices.
+Migration: existing auxes kind=camera copied to cameras table.
+API: GET/list cameras, snapshot, GET/PUT/DELETE ROI per device, POST calibrate+save.
+Devices form: camera_id + qr_identifier fields + live camera panel with snapshot thumbnail.
+47 new tests. opencv-python-headless + pyzbar + numpy as optional [camera] deps.
 
 **Not yet done:**
 - M2 remainder: GitHub OIDC verifier, policy file
 - M2.5: secret profiles YAML, per-job secrets materialisation, artifact sanitisation
 - M3.5: MCU adapter chain (serial capture, esptool, MCP23017)
 - M4: USB-IP, solenoid-hub reset, uf2-msc / picotool flashers
-- M5 remainder: camera capture, artifact storage, Prometheus metrics
+- M5 camera remainder: V4L2Camera SSH wiring, VideoRecorder in CameraCapture.stop(),
+  artifact storage, frame extraction at job end, Prometheus metrics
 - topology/importers/ (protomq_scripts.py, hardware_md.py)
 - ProtoMQ protobuf decoding (Python proto definitions not yet compiled)
 - GET /v1/jobs/{id}/logs non-blocking endpoint
