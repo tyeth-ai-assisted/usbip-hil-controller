@@ -365,6 +365,27 @@ async def test_delete_camera(client):
     assert r.text == ""
 
 
+@pytest.mark.asyncio
+async def test_camera_preview_requires_auth(client):
+    r = await client.get("/ui/cameras/preview?url=http://cam/shot.jpg")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_camera_preview_no_url_returns_400(client):
+    r = await client.get("/ui/cameras/preview", cookies=COOKIE)
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_camera_preview_unreachable_returns_503(client):
+    r = await client.get(
+        "/ui/cameras/preview?url=http://192.0.2.1/shot.jpg",  # TEST-NET, unreachable
+        cookies=COOKIE,
+    )
+    assert r.status_code == 503
+
+
 # ---------------------------------------------------------------------------
 # Connections
 # ---------------------------------------------------------------------------
@@ -503,3 +524,33 @@ async def test_job_detail_not_found(client):
 async def test_job_log_partial_not_found(client):
     r = await client.get("/ui/jobs/nonexistent-id/log", cookies=COOKIE)
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Arduino WipperSnapper test job
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_new_arduino_ws_page_renders(client):
+    r = await client.get("/ui/jobs/new-arduino-ws", cookies=COOKIE)
+    assert r.status_code == 200
+    assert "WipperSnapper" in r.text
+    assert "protomq" in r.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_new_arduino_ws_page_requires_auth(client):
+    r = await client.get("/ui/jobs/new-arduino-ws", follow_redirects=False)
+    assert r.status_code == 303
+
+
+@pytest.mark.asyncio
+async def test_new_arduino_ws_page_shows_default_protomq_ref(client):
+    r = await client.get("/ui/jobs/new-arduino-ws", cookies=COOKIE)
+    assert r.status_code == 200
+    assert "protomq_ref" in r.text
+    assert "wippersnapper_ref" in r.text
+    assert "pio_env" in r.text
+    assert "serial_port" in r.text
+    assert "PlatformIO" in r.text

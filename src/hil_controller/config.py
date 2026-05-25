@@ -28,6 +28,21 @@ class Settings(BaseSettings):
     # a jobs/ subdirectory next to the DB.
     jobs_dir: str = ""
 
+    # WipperSnapper Arduino + protoMQ defaults for the Arduino WS test job form.
+    # Override via HIL_WIPPERSNAPPER_ARDUINO_REPO / HIL_PROTOMQ_REPO / HIL_PROTOMQ_DEFAULT_REF.
+    wippersnapper_arduino_repo: str = "https://github.com/adafruit/Adafruit_WipperSnapper_Arduino.git"
+    protomq_repo: str = "https://github.com/tyeth/protomq.git"
+    protomq_default_ref: str = "main"
+
+    # PlatformIO defaults for the Arduino WS test job form.
+    # Override via HIL_PIO_DEFAULT_ENV / HIL_SERIAL_DEFAULT_PORT.
+    pio_default_env: str = "adafruit_feather_esp32s3"
+    serial_default_port: str = "/dev/ttyACM0"
+
+    # Default MQTT broker host for the Arduino WS test job form.
+    # Override via HIL_MQTT_DEFAULT_HOST.
+    mqtt_default_host: str = "127.0.0.1"
+
 
 _settings: Settings | None = None
 

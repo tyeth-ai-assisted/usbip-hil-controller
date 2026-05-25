@@ -753,6 +753,26 @@ async def new_camera_form(
     return _tr(request, "cameras_form.html", {"camera": None})
 
 
+@router.get("/cameras/preview", include_in_schema=False)
+async def camera_url_preview(
+    request: Request, url: str = "", hil_token: str = Cookie(default="")
+) -> Response:
+    """Proxy a user-supplied camera URL so the form preview can load it without CORS issues."""
+    if not (await _check_web_token(request, hil_token)):
+        return Response(status_code=401)
+    if not url:
+        return Response(status_code=400)
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            return Response(content=r.content, media_type="image/jpeg")
+    except Exception:
+        return Response(status_code=503)
+
+
 @router.get("/cameras/{cam_id}/form", response_class=HTMLResponse, include_in_schema=False)
 async def edit_camera_form(
     request: Request, cam_id: str, hil_token: str = Cookie(default="")
@@ -1215,6 +1235,148 @@ async def new_job_page(
     })
 
 
+@router.get("/jobs/new-arduino-ws", response_class=HTMLResponse, include_in_schema=False)
+async def new_arduino_ws_job_page(
+    request: Request, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    mcu_devices = [d for d in await _devices(db_path) if d["kind"] == "microcontroller"]
+    from hil_controller.config import get_settings
+    cfg = get_settings()
+    scripts_dir = cfg.scripts_dir
+    scripts = sorted(Path(scripts_dir).glob("*.json")) if scripts_dir and Path(scripts_dir).exists() else []
+    return _tr(request, "job_new_arduino_ws.html", {
+        "token": hil_token,
+        "active": "jobs",
+        "mcu_devices": mcu_devices,
+        "scripts": scripts,
+        "cfg": {
+            "wippersnapper_repo": cfg.wippersnapper_arduino_repo,
+            "protomq_repo": cfg.protomq_repo,
+            "protomq_default_ref": cfg.protomq_default_ref,
+            "pio_default_env": cfg.pio_default_env,
+            "serial_default_port": cfg.serial_default_port,
+            "mqtt_default_host": cfg.mqtt_default_host,
+        },
+        "defaults": _ARDUINO_WS_DEFAULTS,
+        "disk": _disk_info(_jobs_dir()),
+        "form": None,
+        "error": None,
+    })
+
+
+@router.post("/jobs/arduino-ws", include_in_schema=False, response_model=None)
+async def submit_arduino_ws_job(
+    request: Request,
+    hil_token: str = Cookie(default=""),
+    wippersnapper_repo: Annotated[str, Form()] = "",
+    wippersnapper_ref: Annotated[str, Form()] = "",
+    protomq_repo: Annotated[str, Form()] = "",
+    protomq_ref: Annotated[str, Form()] = "",
+    pat: Annotated[str, Form()] = "",
+    submodules: Annotated[str, Form()] = "",
+    pio_env: Annotated[str, Form()] = "",
+    serial_port: Annotated[str, Form()] = "",
+    setup: Annotated[str, Form()] = "",
+    test_cmd: Annotated[str, Form()] = "python -m pytest tests/ -v --tb=short",
+    protomq_script: Annotated[str, Form()] = "",
+    device_id: Annotated[str, Form()] = "",
+    secrets_profile: Annotated[str, Form()] = "bench-protomq",
+    mqtt_host: Annotated[str, Form()] = "",
+    mqtt_port: Annotated[str, Form()] = "1884",
+    io_username: Annotated[str, Form()] = "",
+    io_key: Annotated[str, Form()] = "",
+    timeout_total: Annotated[str, Form()] = "1200",
+    timeout_run: Annotated[str, Form()] = "300",
+    timeout_deploy: Annotated[str, Form()] = "900",
+) -> Response:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+
+    from hil_controller.config import get_settings
+    cfg = get_settings()
+    if not wippersnapper_repo:
+        wippersnapper_repo = cfg.wippersnapper_arduino_repo
+    if not protomq_repo:
+        protomq_repo = cfg.protomq_repo
+    if not protomq_ref:
+        protomq_ref = cfg.protomq_default_ref
+    if not wippersnapper_ref:
+        wippersnapper_ref = "main"
+    if not pio_env:
+        pio_env = cfg.pio_default_env
+    if not serial_port:
+        serial_port = cfg.serial_default_port
+    if not mqtt_host:
+        mqtt_host = cfg.mqtt_default_host
+
+    db_path: str = request.app.state.db_path
+    mcu_devices = [d for d in await _devices(db_path) if d["kind"] == "microcontroller"]
+    scripts_dir = cfg.scripts_dir
+    scripts = sorted(Path(scripts_dir).glob("*.json")) if scripts_dir and Path(scripts_dir).exists() else []
+
+    form_vals = {
+        "wippersnapper_repo": wippersnapper_repo, "wippersnapper_ref": wippersnapper_ref,
+        "protomq_repo": protomq_repo, "protomq_ref": protomq_ref,
+        "pat": pat, "submodules": bool(submodules),
+        "pio_env": pio_env, "serial_port": serial_port,
+        "setup": setup, "test_cmd": test_cmd,
+        "protomq_script": protomq_script, "device_id": device_id,
+        "secrets_profile": secrets_profile, "mqtt_host": mqtt_host, "mqtt_port": mqtt_port,
+        "io_username": io_username, "io_key": io_key,
+        "timeout_total": timeout_total, "timeout_run": timeout_run, "timeout_deploy": timeout_deploy,
+    }
+
+    def _ctx(error: str) -> dict:
+        return {
+            "token": hil_token, "active": "jobs",
+            "mcu_devices": mcu_devices, "scripts": scripts,
+            "cfg": {
+                "wippersnapper_repo": cfg.wippersnapper_arduino_repo,
+                "protomq_repo": cfg.protomq_repo,
+                "protomq_default_ref": cfg.protomq_default_ref,
+                "pio_default_env": cfg.pio_default_env,
+                "serial_default_port": cfg.serial_default_port,
+                "mqtt_default_host": cfg.mqtt_default_host,
+            },
+            "defaults": _ARDUINO_WS_DEFAULTS,
+            "disk": _disk_info(_jobs_dir()),
+            "form": form_vals, "error": error,
+        }
+
+    try:
+        job_req = _build_arduino_ws_job_request(
+            wippersnapper_repo=wippersnapper_repo,
+            wippersnapper_ref=wippersnapper_ref,
+            protomq_repo=protomq_repo,
+            protomq_ref=protomq_ref,
+            pat=pat,
+            submodules=bool(submodules),
+            pio_env=pio_env,
+            serial_port=serial_port,
+            setup=setup,
+            test_cmd=test_cmd,
+            protomq_script=protomq_script,
+            device_id=device_id,
+            secrets_profile=secrets_profile,
+            mqtt_host=mqtt_host,
+            mqtt_port=mqtt_port,
+            io_username=io_username,
+            io_key=io_key,
+            timeout_total=int(timeout_total or 1200),
+            timeout_run=int(timeout_run or 300),
+            timeout_deploy=int(timeout_deploy or 900),
+        )
+        resp = await _call_jobs_api(request, job_req, hil_token)
+        job_id = resp["id"]
+    except Exception as exc:
+        return _tr(request, "job_new_arduino_ws.html", _ctx(str(exc)))
+
+    return RedirectResponse(f"/ui/jobs/{job_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
 @router.post("/jobs", include_in_schema=False, response_model=None)
 async def submit_job_form(
     request: Request,
@@ -1449,6 +1611,108 @@ async def purge_eligible(
         await db.commit()
     assets = await _asset_rows(db_path)
     return _tr(request, "assets_body.html", {"assets": assets})
+
+
+# ---------------------------------------------------------------------------
+# Arduino WipperSnapper Test job
+# ---------------------------------------------------------------------------
+
+
+_ARDUINO_WS_DEFAULTS = {
+    "setup": "pip install -e . && pip install -e protomq/",
+    "test_cmd": "python -m pytest tests/ -v --tb=short",
+}
+
+
+def _build_arduino_ws_job_request(
+    *,
+    wippersnapper_repo: str,
+    wippersnapper_ref: str,
+    protomq_repo: str,
+    protomq_ref: str,
+    pat: str,
+    submodules: bool,
+    pio_env: str,
+    serial_port: str,
+    setup: str,
+    test_cmd: str,
+    protomq_script: str,
+    device_id: str,
+    secrets_profile: str,
+    mqtt_host: str,
+    mqtt_port: str,
+    io_username: str,
+    io_key: str,
+    timeout_total: int,
+    timeout_run: int,
+    timeout_deploy: int,
+) -> dict:
+    import shlex as _shlex
+
+    proto_clone = (
+        f"git clone --depth 1 --branch {_shlex.quote(protomq_ref)} "
+        f"{_shlex.quote(protomq_repo)} protomq"
+    )
+    pio_steps = (
+        f"pip install platformio && "
+        f"pio run -e {_shlex.quote(pio_env)} && "
+        f"pio run -e {_shlex.quote(pio_env)} --target upload --upload-port {_shlex.quote(serial_port)}"
+    )
+    extra = setup.replace("\r\n", "\n").replace("\r", "\n").strip()
+    full_setup = proto_clone + " && " + pio_steps + (" && " + extra if extra else "")
+
+    source: dict = {
+        "repo": wippersnapper_repo,
+        "ref": wippersnapper_ref,
+        "shallow": True,
+        "submodules": submodules,
+        "setup": ["bash", "-c", full_setup],
+    }
+    if pat:
+        source["pat"] = pat
+
+    _mqtt_port = int(mqtt_port) if mqtt_port.strip().isdigit() else 1884
+    params: dict = {
+        "entry": "bash",
+        "args": ["-c", test_cmd.replace("\r\n", "\n").replace("\r", "\n")],
+        "protomq_ref": protomq_ref,
+        "secrets_format": "dotenv",
+    }
+    if protomq_script and mqtt_host:
+        params["protomq"] = {
+            "broker_host": mqtt_host,
+            "mqtt_port": _mqtt_port,
+            "api_port": 5173,
+            "script": protomq_script,
+        }
+
+    target: dict = {"pool": "wippersnapper-arduino"}
+    if device_id:
+        target["device"] = {"id": device_id}
+    else:
+        target["device"] = {"kind": "microcontroller", "capabilities": ["arduino-snapper"]}
+
+    secrets: dict = {"MQTT_HOST": mqtt_host, "MQTT_PORT": str(_mqtt_port)}
+    if io_username:
+        secrets["IO_USERNAME"] = io_username
+    if io_key:
+        secrets["IO_KEY"] = io_key
+
+    return {
+        "target": target,
+        "script": "pytest-suite",
+        "payload": {"kind": "git-source", "source": source},
+        "params": params,
+        "secrets": secrets,
+        "secrets_profile": secrets_profile,
+        "metadata": {"wippersnapper_ref": wippersnapper_ref, "protomq_ref": protomq_ref},
+        "timeouts": {
+            "total_s": timeout_total,
+            "deploy_s": timeout_deploy,
+            "run_s": timeout_run,
+            "flash_s": 300,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

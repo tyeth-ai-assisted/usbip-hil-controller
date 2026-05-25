@@ -57,6 +57,17 @@
     <button type="button" onclick="addStream()" class="btn btn-sm btn-outline" style="margin-bottom:1rem;">+ Add Stream</button>
 
     <hr class="section-sep" style="margin-top:1rem;">
+    <h2>Snapshot Preview</h2>
+    <div style="margin-bottom:0.75rem;display:flex;align-items:center;gap:0.75rem;">
+      <button type="button" class="btn btn-sm btn-outline" onclick="camPreviewSnap()">Fetch Snapshot</button>
+      <span id="cam-preview-status" style="font-size:0.8rem;color:#666;"></span>
+    </div>
+    <div id="cam-preview-box" style="display:none;margin-bottom:1rem;">
+      <img id="cam-preview-img" src="" alt="Camera preview"
+           style="max-width:320px;border-radius:6px;border:1px solid #ddd;display:block;">
+    </div>
+
+    <hr class="section-sep" style="margin-top:1rem;">
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">{% if camera %}Save Changes{% else %}Create Camera{% endif %}</button>
       <button type="button" class="btn btn-secondary"
@@ -66,6 +77,21 @@
 </div>
 
 <script>
+function camPreviewSnap() {
+  var urls = Array.from(document.querySelectorAll('input[name="stream_url"]'))
+    .map(function(i) { return i.value.trim(); }).filter(Boolean);
+  var url = urls[0];
+  var status = document.getElementById('cam-preview-status');
+  var box = document.getElementById('cam-preview-box');
+  var img = document.getElementById('cam-preview-img');
+  if (!url) { status.textContent = 'No stream URL entered.'; return; }
+  status.textContent = 'Fetching…';
+  box.style.display = '';
+  img.src = '/ui/cameras/preview?url=' + encodeURIComponent(url) + '&_t=' + Date.now();
+  img.onload = function() { status.textContent = ''; };
+  img.onerror = function() { status.textContent = 'Failed to load snapshot.'; box.style.display = 'none'; };
+}
+
 function addStream() {
   const row = document.createElement('div');
   row.className = 'stream-row';

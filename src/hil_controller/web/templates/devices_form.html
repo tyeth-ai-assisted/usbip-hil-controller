@@ -81,45 +81,78 @@
     <hr class="section-sep">
     <h2>Camera Panel</h2>
     <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-start;margin-bottom:1rem;">
-      <div>
-        <p style="margin:0 0 0.5rem;font-size:0.85rem;color:#555;">Live snapshot (auto-refreshes every 5 s)</p>
-        <img id="cam-snap-{{ device.id }}"
-             src="/ui/devices/{{ device.id }}/snapshot"
-             alt="Snapshot unavailable"
-             style="max-width:320px;border-radius:6px;border:1px solid #ddd;">
+
+      <!-- Small canvas (drag to draw ROI) -->
+      <div style="flex-shrink:0;">
+        <p style="margin:0 0 0.4rem;font-size:0.85rem;color:#555;">Drag to draw ROI &middot; blue&nbsp;=&nbsp;saved &middot; orange&nbsp;=&nbsp;pending &middot; auto-refreshes&nbsp;10&nbsp;s</p>
+        <canvas id="roi-canvas-{{ device.id }}" width="320" height="240"
+                style="display:block;border-radius:6px;border:1px solid #ddd;cursor:crosshair;"></canvas>
+        <div style="margin-top:0.4rem;display:flex;gap:0.5rem;">
+          <button type="button" class="btn btn-sm btn-outline"
+                  onclick="openRoiModal('{{ device.id }}')">Large Preview</button>
+          <button type="button" class="btn btn-sm btn-outline"
+                  onclick="refreshSnap('{{ device.id }}')">Refresh</button>
+        </div>
       </div>
+
+      <!-- Controls -->
       <div style="min-width:200px;">
         <p style="margin:0 0 0.5rem;font-size:0.85rem;color:#555;">
           Camera: <strong>{{ device.camera_id }}</strong><br>
           {% if device.qr_identifier %}QR: <code style="font-size:0.75rem;">{{ device.qr_identifier }}</code>{% endif %}
         </p>
         <div id="cam-roi-status-{{ device.id }}">
-          {% if roi %}
-            ROI: x={{ roi.x }} y={{ roi.y }} w={{ roi.w }} h={{ roi.h }} ({{ roi.source }})
-          {% else %}
-            No ROI set
-          {% endif %}
+          {% if roi %}ROI: x={{ roi.x }} y={{ roi.y }} w={{ roi.w }} h={{ roi.h }} ({{ roi.source }})
+          {% else %}No ROI set{% endif %}
         </div>
         <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
           {% if device.qr_identifier %}
           <button type="button" class="btn btn-sm btn-outline"
             onclick="detectQr('{{ device.id }}', '{{ token }}')">Re-detect QR</button>
           {% endif %}
+          <button type="button" class="btn btn-sm btn-outline"
+            onclick="undoRoi('{{ device.id }}')">Undo</button>
           <button type="button" class="btn btn-sm btn-danger"
             onclick="clearRoi('{{ device.id }}', '{{ token }}')">Clear ROI</button>
         </div>
 
         <hr style="margin:0.75rem 0;border-color:#eee;">
-        <p style="font-size:0.8rem;color:#555;margin:0 0 0.4rem;">Set ROI manually (pixels in camera frame):</p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.3rem 0.5rem;margin-bottom:0.5rem;" id="roi-fields-{{ device.id }}">
-          <label style="font-size:0.8rem;">x <input type="number" id="roi-x-{{ device.id }}" min="0" style="width:4rem;font-size:0.8rem;" placeholder="0"></label>
-          <label style="font-size:0.8rem;">y <input type="number" id="roi-y-{{ device.id }}" min="0" style="width:4rem;font-size:0.8rem;" placeholder="0"></label>
-          <label style="font-size:0.8rem;">w <input type="number" id="roi-w-{{ device.id }}" min="1" style="width:4rem;font-size:0.8rem;" placeholder="320"></label>
-          <label style="font-size:0.8rem;">h <input type="number" id="roi-h-{{ device.id }}" min="1" style="width:4rem;font-size:0.8rem;" placeholder="240"></label>
+        <p style="font-size:0.8rem;color:#555;margin:0 0 0.4rem;">ROI (pixels in camera frame):</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.3rem 0.5rem;margin-bottom:0.5rem;">
+          <label style="font-size:0.8rem;">x
+            <input type="number" id="roi-x-{{ device.id }}" min="0" style="width:4rem;font-size:0.8rem;" placeholder="0"
+                   oninput="onRoiInputChange('{{ device.id }}')"
+                   value="{{ roi.x if roi else '' }}"></label>
+          <label style="font-size:0.8rem;">y
+            <input type="number" id="roi-y-{{ device.id }}" min="0" style="width:4rem;font-size:0.8rem;" placeholder="0"
+                   oninput="onRoiInputChange('{{ device.id }}')"
+                   value="{{ roi.y if roi else '' }}"></label>
+          <label style="font-size:0.8rem;">w
+            <input type="number" id="roi-w-{{ device.id }}" min="1" style="width:4rem;font-size:0.8rem;" placeholder="320"
+                   oninput="onRoiInputChange('{{ device.id }}')"
+                   value="{{ roi.w if roi else '' }}"></label>
+          <label style="font-size:0.8rem;">h
+            <input type="number" id="roi-h-{{ device.id }}" min="1" style="width:4rem;font-size:0.8rem;" placeholder="240"
+                   oninput="onRoiInputChange('{{ device.id }}')"
+                   value="{{ roi.h if roi else '' }}"></label>
         </div>
         <button type="button" class="btn btn-sm btn-primary"
-          onclick="saveRoi('{{ device.id }}', '{{ token }}')"
-          >Save ROI</button>
+          onclick="saveRoi('{{ device.id }}', '{{ token }}')">Save ROI</button>
+      </div>
+    </div>
+
+    <!-- Large preview modal -->
+    <div id="roi-modal-{{ device.id }}"
+         style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:8px;padding:1rem;max-width:95vw;max-height:95vh;overflow:auto;position:relative;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+          <h3 style="margin:0;font-size:1rem;">ROI Selection &mdash; {{ device.id }}</h3>
+          <button type="button" class="btn btn-sm btn-secondary"
+                  onclick="closeRoiModal('{{ device.id }}')">Close</button>
+        </div>
+        <p style="font-size:0.8rem;color:#666;margin:0 0 0.5rem;">Drag to draw ROI &middot; blue&nbsp;=&nbsp;saved &middot; orange&nbsp;=&nbsp;pending (unsaved)</p>
+        <canvas id="roi-modal-canvas-{{ device.id }}"
+                style="display:block;cursor:crosshair;border-radius:4px;border:1px solid #ddd;max-width:100%;"></canvas>
       </div>
     </div>
     {% endif %}
@@ -134,51 +167,221 @@
 
 <script>
 (function() {
-  var snapId = 'cam-snap-{{ device.id if device else "" }}';
-  var snapEl = document.getElementById(snapId);
-  if (snapEl) {
-    setInterval(function() {
-      snapEl.src = '/ui/devices/{{ device.id if device else "" }}/snapshot?_t=' + Date.now();
-    }, 5000);
+  var deviceId = '{{ device.id if device else "" }}';
+  if (!deviceId) return;
+  var smallCanvas = document.getElementById('roi-canvas-' + deviceId);
+  if (!smallCanvas) return;  // no camera assigned
+
+  var sctx = smallCanvas.getContext('2d');
+  var modalCanvas = document.getElementById('roi-modal-canvas-' + deviceId);
+  var mctx = modalCanvas ? modalCanvas.getContext('2d') : null;
+
+  var snapUrl = '/ui/devices/' + deviceId + '/snapshot';
+  var img = new Image();
+  var imgLoaded = false;
+  var imgW = 0, imgH = 0;
+  var dragging = false;
+
+  var savedRoi = {% if roi %}{"x":{{ roi.x }},"y":{{ roi.y }},"w":{{ roi.w }},"h":{{ roi.h }}}{% else %}null{% endif %};
+  var pendingRoi = null;
+
+  function redraw(canvas, ctx) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (imgLoaded) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    else {
+      ctx.fillStyle = '#f0f0f0';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#aaa';
+      ctx.font = '13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Loading…', canvas.width / 2, canvas.height / 2);
+    }
+    if (savedRoi) _drawBox(ctx, canvas, savedRoi, 'rgba(74,158,255,0.2)', '#4a9eff');
+    if (pendingRoi) _drawBox(ctx, canvas, pendingRoi, 'rgba(255,140,0,0.2)', '#ff8c00');
   }
+
+  function _drawBox(ctx, canvas, roi, fill, stroke) {
+    if (!imgLoaded || !imgW || !imgH) return;
+    var sx = canvas.width / imgW, sy = canvas.height / imgH;
+    ctx.save();
+    ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = 2;
+    ctx.fillRect(roi.x*sx, roi.y*sy, roi.w*sx, roi.h*sy);
+    ctx.strokeRect(roi.x*sx, roi.y*sy, roi.w*sx, roi.h*sy);
+    ctx.restore();
+  }
+
+  function toImg(e, canvas) {
+    var rect = canvas.getBoundingClientRect();
+    var px = (e.clientX - rect.left) * canvas.width / rect.width;
+    var py = (e.clientY - rect.top) * canvas.height / rect.height;
+    return {
+      x: Math.max(0, Math.min(imgW, Math.round(px * imgW / canvas.width))),
+      y: Math.max(0, Math.min(imgH, Math.round(py * imgH / canvas.height)))
+    };
+  }
+
+  function attachDrag(canvas, ctx_) {
+    if (!canvas) return;
+    var ds = null;
+    canvas.addEventListener('mousedown', function(e) {
+      if (!imgLoaded) return;
+      dragging = true; ds = toImg(e, canvas);
+    });
+    canvas.addEventListener('mousemove', function(e) {
+      if (!dragging || !ds) return;
+      var dc = toImg(e, canvas);
+      pendingRoi = {x:Math.min(ds.x,dc.x), y:Math.min(ds.y,dc.y),
+                    w:Math.abs(dc.x-ds.x), h:Math.abs(dc.y-ds.y)};
+      redraw(canvas, ctx_);
+      updateInputs(pendingRoi);
+    });
+    canvas.addEventListener('mouseup', function(e) {
+      if (!dragging) return;
+      dragging = false;
+      var dc = toImg(e, canvas);
+      var w = Math.abs(dc.x - ds.x), h = Math.abs(dc.y - ds.y);
+      if (w >= 5 && h >= 5) {
+        pendingRoi = {x:Math.min(ds.x,dc.x), y:Math.min(ds.y,dc.y), w:w, h:h};
+      }
+      ds = null;
+      if (sctx) redraw(smallCanvas, sctx);
+      if (mctx) redraw(modalCanvas, mctx);
+      updateInputs(pendingRoi !== null ? pendingRoi : savedRoi);
+    });
+    canvas.addEventListener('mouseleave', function() {
+      if (dragging) { dragging = false; ds = null; redraw(canvas, ctx_); }
+    });
+  }
+
+  attachDrag(smallCanvas, sctx);
+  attachDrag(modalCanvas, mctx);
+
+  function updateInputs(roi) {
+    if (!roi) return;
+    document.getElementById('roi-x-'+deviceId).value = roi.x;
+    document.getElementById('roi-y-'+deviceId).value = roi.y;
+    document.getElementById('roi-w-'+deviceId).value = roi.w;
+    document.getElementById('roi-h-'+deviceId).value = roi.h;
+  }
+
+  function loadSnap() {
+    img.src = snapUrl + '?_t=' + Date.now();
+  }
+
+  img.onload = function() {
+    imgLoaded = true; imgW = img.naturalWidth; imgH = img.naturalHeight;
+    if (imgH) smallCanvas.height = Math.round(smallCanvas.width * imgH / imgW);
+    redraw(smallCanvas, sctx);
+    var modal = document.getElementById('roi-modal-' + deviceId);
+    if (modal && modal.style.display !== 'none' && mctx) redraw(modalCanvas, mctx);
+  };
+  img.onerror = function() {
+    sctx.fillStyle = '#f0f0f0'; sctx.fillRect(0, 0, smallCanvas.width, smallCanvas.height);
+    sctx.fillStyle = '#999'; sctx.font = '13px sans-serif'; sctx.textAlign = 'center';
+    sctx.fillText('Snapshot unavailable', smallCanvas.width/2, smallCanvas.height/2);
+  };
+
+  loadSnap();
+  setInterval(function() { if (!dragging) loadSnap(); }, 10000);
+
+  // Globals used from HTML onclick / external async functions
+  window.refreshSnap = function(devId) { if (devId === deviceId) loadSnap(); };
+
+  window.undoRoi = function(devId) {
+    if (devId !== deviceId) return;
+    pendingRoi = null;
+    if (savedRoi) updateInputs(savedRoi);
+    else ['roi-x-','roi-y-','roi-w-','roi-h-'].forEach(function(p) {
+      document.getElementById(p+deviceId).value = '';
+    });
+    redraw(smallCanvas, sctx);
+    if (mctx) redraw(modalCanvas, mctx);
+  };
+
+  window.onRoiInputChange = function(devId) {
+    if (devId !== deviceId || dragging) return;
+    var g = function(id) { return parseInt(document.getElementById(id).value, 10); };
+    var x=g('roi-x-'+deviceId), y=g('roi-y-'+deviceId), w=g('roi-w-'+deviceId), h=g('roi-h-'+deviceId);
+    pendingRoi = (!isNaN(x)&&!isNaN(y)&&w>0&&h>0) ? {x:x,y:y,w:w,h:h} : null;
+    redraw(smallCanvas, sctx);
+    if (mctx) redraw(modalCanvas, mctx);
+  };
+
+  window._camUpdateSavedRoi = function(devId, roi) {
+    if (devId !== deviceId) return;
+    savedRoi = roi; pendingRoi = null;
+    if (roi) updateInputs(roi);
+    else ['roi-x-','roi-y-','roi-w-','roi-h-'].forEach(function(p) {
+      document.getElementById(p+deviceId).value = '';
+    });
+    redraw(smallCanvas, sctx);
+    if (mctx) redraw(modalCanvas, mctx);
+  };
+
+  window.openRoiModal = function(devId) {
+    if (devId !== deviceId || !modalCanvas) return;
+    var modal = document.getElementById('roi-modal-' + deviceId);
+    modal.style.display = 'flex';
+    var maxW = Math.min(window.innerWidth * 0.88, 900);
+    modalCanvas.width = Math.round(maxW);
+    modalCanvas.height = imgH && imgW ? Math.round(maxW * imgH / imgW) : Math.round(maxW * 0.75);
+    if (mctx) redraw(modalCanvas, mctx);
+  };
+
+  window.closeRoiModal = function(devId) {
+    if (devId !== deviceId) return;
+    var modal = document.getElementById('roi-modal-' + deviceId);
+    if (modal) modal.style.display = 'none';
+  };
+
 })();
 
 function _roiEl(deviceId) { return document.getElementById('cam-roi-status-' + deviceId); }
-function _roiText(d) { return 'ROI: x=' + d.x + ' y=' + d.y + ' w=' + d.w + ' h=' + d.h + ' (' + (d.source||'manual') + ')'; }
+function _roiText(d) { return 'ROI: x='+d.x+' y='+d.y+' w='+d.w+' h='+d.h+' ('+(d.source||'manual')+')'; }
 
 async function saveRoi(deviceId, token) {
   const g = id => parseInt(document.getElementById(id).value, 10);
-  const x = g('roi-x-' + deviceId), y = g('roi-y-' + deviceId);
-  const w = g('roi-w-' + deviceId), h = g('roi-h-' + deviceId);
+  const x = g('roi-x-'+deviceId), y = g('roi-y-'+deviceId);
+  const w = g('roi-w-'+deviceId), h = g('roi-h-'+deviceId);
   if ([x,y,w,h].some(isNaN) || w < 1 || h < 1) {
     alert('Enter valid x, y, w, h values (w and h must be ≥ 1).');
     return;
   }
-  const r = await fetch('/v1/devices/' + deviceId + '/camera/roi', {
+  const r = await fetch('/v1/devices/'+deviceId+'/camera/roi', {
     method: 'PUT',
-    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
+    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer '+token},
     body: JSON.stringify({x, y, w, h}),
   });
   const el = _roiEl(deviceId);
-  el.textContent = r.ok ? _roiText(await r.json()) : 'Error: ' + (await r.text());
+  if (r.ok) {
+    const d = await r.json();
+    el.textContent = _roiText(d);
+    if (window._camUpdateSavedRoi) window._camUpdateSavedRoi(deviceId, {x:d.x,y:d.y,w:d.w,h:d.h});
+  } else { el.textContent = 'Error: ' + (await r.text()); }
 }
 
 async function detectQr(deviceId, token) {
   const el = _roiEl(deviceId);
   el.textContent = 'Detecting QR…';
-  const r = await fetch('/v1/devices/' + deviceId + '/camera/calibrate/save', {
-    method: 'POST',
-    headers: {'Authorization': 'Bearer ' + token},
+  const r = await fetch('/v1/devices/'+deviceId+'/camera/calibrate/save', {
+    method: 'POST', headers: {'Authorization': 'Bearer '+token},
   });
-  el.textContent = r.ok ? _roiText(await r.json()) : 'Error: ' + (await r.text());
+  if (r.ok) {
+    const d = await r.json();
+    el.textContent = _roiText(d);
+    if (window._camUpdateSavedRoi) window._camUpdateSavedRoi(deviceId, {x:d.x,y:d.y,w:d.w,h:d.h});
+  } else { el.textContent = 'Error: ' + (await r.text()); }
 }
 
 async function clearRoi(deviceId, token) {
-  if (!confirm('Clear ROI for ' + deviceId + '?')) return;
-  const r = await fetch('/v1/devices/' + deviceId + '/camera/roi', {
-    method: 'DELETE',
-    headers: {'Authorization': 'Bearer ' + token},
+  if (!confirm('Clear ROI for '+deviceId+'?')) return;
+  const r = await fetch('/v1/devices/'+deviceId+'/camera/roi', {
+    method: 'DELETE', headers: {'Authorization': 'Bearer '+token},
   });
-  _roiEl(deviceId).textContent = r.ok ? 'No ROI set' : 'Error: ' + (await r.text());
+  const el = _roiEl(deviceId);
+  if (r.ok) {
+    el.textContent = 'No ROI set';
+    if (window._camUpdateSavedRoi) window._camUpdateSavedRoi(deviceId, null);
+  } else { el.textContent = 'Error: ' + (await r.text()); }
 }
 </script>
