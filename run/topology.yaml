@@ -10,13 +10,67 @@ hosts:
     ssh_key_path: /etc/hil/keys/rpi-displays
     capabilities: [power-control, mcp23017, usbip-server, cameras]
 
+  - id: rpi-hil001
+    role: sbc-fleet
+    addr: rpi-hil001
+    transport: ssh
+    ssh_user: pi
+    ssh_key_path: /etc/hil/keys/rpi-hil-fleet
+    max_concurrent_jobs: 1
+    capabilities: []
+
+  - id: rpi-hil002
+    role: sbc-fleet
+    addr: rpi-hil002
+    transport: ssh
+    ssh_user: pi
+    ssh_key_path: /etc/hil/keys/rpi-hil-fleet
+    max_concurrent_jobs: 1
+    capabilities: []
+
+  - id: rpi-hil003
+    role: sbc-fleet
+    addr: rpi-hil003
+    transport: ssh
+    ssh_user: pi
+    ssh_key_path: /etc/hil/keys/rpi-hil-fleet
+    max_concurrent_jobs: 1
+    capabilities: []
+
+  - id: rpi-hil004
+    role: sbc-fleet
+    addr: rpi-hil004
+    transport: ssh
+    ssh_user: pi
+    ssh_key_path: /etc/hil/keys/rpi-hil-fleet
+    max_concurrent_jobs: 1
+    capabilities: []
+
+  - id: rpi-hil005
+    role: sbc-fleet
+    addr: rpi-hil005
+    transport: ssh
+    ssh_user: pi
+    ssh_key_path: /etc/hil/keys/rpi-hil-fleet
+    max_concurrent_jobs: 1
+    capabilities: []
+
+  - id: rpi-hil006
+    role: sbc-fleet
+    addr: rpi-hil006
+    transport: ssh
+    ssh_user: pi
+    ssh_key_path: /etc/hil/keys/rpi-hil-fleet
+    max_concurrent_jobs: 1
+    capabilities: []
+
 cameras:
   - id: android-note9
     source: http://192.168.1.249:8080/shot.jpg
     model: IP Webcam Android
     pool: public
     status: available
-    notes: Android Note 9 running IP Webcam app; covers display-test bench (13 boards)
+    notes: Android Note 9 running IP Webcam app; covers WipperSnapper Python SBC fleet (rpi-hil001–006)
 
   - id: csi-rpi-displays
     host_id: rpi-displays
@@ -27,6 +81,62 @@ cameras:
     notes: Raspberry Pi CSI camera mounted on rpi-displays; covers microcontroller DUT displays
 
 devices:
+  # --- WipperSnapper Python SBC fleet (monitored by android-note9 IP webcam) ---
+
+  - id: rpi-hil001-pi5-a
+    host_id: rpi-hil001
+    kind: sbc
+    model: pi5
+    pool: wippersnapper-python
+    capabilities: [linux, python-snapper]
+    status: available
+    camera_id: android-note9
+
+  - id: rpi-hil002-pi5-a
+    host_id: rpi-hil002
+    kind: sbc
+    model: pi5
+    pool: wippersnapper-python
+    capabilities: [linux, python-snapper]
+    status: available
+    camera_id: android-note9
+
+  - id: rpi-hil003-pi5-a
+    host_id: rpi-hil003
+    kind: sbc
+    model: pi5
+    pool: wippersnapper-python
+    capabilities: [linux, python-snapper]
+    status: available
+    camera_id: android-note9
+
+  - id: rpi-hil004-pi5-a
+    host_id: rpi-hil004
+    kind: sbc
+    model: pi5
+    pool: wippersnapper-python
+    capabilities: [linux, python-snapper]
+    status: available
+    camera_id: android-note9
+
+  - id: rpi-hil005-pi5-a
+    host_id: rpi-hil005
+    kind: sbc
+    model: pi5
+    pool: wippersnapper-python
+    capabilities: [linux, python-snapper]
+    status: available
+    camera_id: android-note9
+
+  - id: rpi-hil006-pi5-a
+    host_id: rpi-hil006
+    kind: sbc
+    model: pi5
+    pool: wippersnapper-python
+    capabilities: [linux, python-snapper]
+    status: available
+    camera_id: android-note9
+
   # --- Display-test bench boards (monitored by csi-rpi-displays CSI camera) ---
   # Product data + ROIs sourced from tyeth/protomq PR #1 (board_calibration.json)
 
