@@ -19,6 +19,30 @@ except Exception as exc:  # noqa: BLE001
     _IMPORT_ERROR = exc
 
 
+def _smallest_full_fov_mode(cam, sensor_size: tuple[int, int]) -> tuple[int, int]:
+    """Pick the smallest sensor mode whose crop covers the full active area.
+
+    Sensors typically expose multiple modes: smaller ones use a centre
+    crop of the pixel array, larger ones use the full area (often via
+    binning). We want the smallest *full-area* mode so FoV stays full
+    while memory pressure stays manageable on small boards.
+    """
+    full_w, full_h = sensor_size
+    candidates: list[tuple[int, int]] = []
+    for mode in getattr(cam, "sensor_modes", []) or []:
+        size = mode.get("size")
+        crop = mode.get("crop_limits")
+        if not size or not crop:
+            continue
+        _, _, cw, ch = crop
+        # Mode is full-FoV when its crop window matches the active area.
+        if cw >= full_w and ch >= full_h:
+            candidates.append(size)
+    if not candidates:
+        return sensor_size
+    return min(candidates, key=lambda s: s[0] * s[1])
+
+
 class Picamera2Backend(Backend):
     name = "picamera2"
 
@@ -41,16 +65,20 @@ class Picamera2Backend(Backend):
             # cropped centre reads — at 1280x720 you only see the middle
             # ~55% x 41% of the active area.
             sensor_size = cam.sensor_resolution
-            # Resolve "native" (0) to the sensor's full resolution.
-            main_w = self.cfg.width or sensor_size[0]
-            main_h = self.cfg.height or sensor_size[1]
+            full_fov_raw = _smallest_full_fov_mode(cam, sensor_size)
+            # Resolve "native" (0) to the full-FoV raw mode picked above —
+            # not the sensor's max resolution, because at 4656x3496 a
+            # continuous video pipeline blows the Pi Zero 2W's CMA budget
+            # (RGB main + raw stream + ISP buffers ~ 150-200MB).
+            main_w = self.cfg.width or full_fov_raw[0]
+            main_h = self.cfg.height or full_fov_raw[1]
             # video_configuration keeps the ISP+AF loop running at a stable
             # framerate, which is what continuous AF needs to converge. The
             # still_configuration runs the pipeline only during capture and
             # leaves AF starved.
             config = cam.create_video_configuration(
                 main={"size": (main_w, main_h), "format": "RGB888"},
-                raw={"size": sensor_size},
+                raw={"size": full_fov_raw},
             )
             cam.configure(config)
             # Remember the resolved size so /health reports the actual stream.
