@@ -4,11 +4,14 @@ A small HTTP server that keeps a camera pipeline warm and serves fresh JPEG snap
 
 ## Endpoints
 
-| Path      | Response                                                                 |
-|-----------|--------------------------------------------------------------------------|
-| `GET /`        | `image/jpeg` — latest frame from the warm pipeline (sub-100ms when warm) |
-| `GET /stream`  | `multipart/x-mixed-replace` MJPEG stream (record + split frames client-side) |
-| `GET /health`  | JSON: backend name, AF state, resolution                                 |
+| Path                | Response                                                                 |
+|---------------------|--------------------------------------------------------------------------|
+| `GET /`             | `image/jpeg` — latest frame from the warm pipeline (sub-100ms when warm) |
+| `GET /?full=1`      | `image/jpeg` at sensor-native resolution (reconfigures pipeline; ~1-2s)  |
+| `GET /stream`       | `multipart/x-mixed-replace` MJPEG stream (record + split frames client-side) |
+| `GET /health`       | JSON: backend, AF, lens state, illuminator state                         |
+| `POST /lens`        | `{"mode": "auto"\|"manual", "position": float}` — override continuous AF |
+| `POST /illuminator` | `{"brightness": 0..255}` — drive the NeoPixel ring                       |
 
 ## Backends
 
@@ -49,7 +52,29 @@ sudo apt install -y python3-opencv v4l-utils
 server.py [--port 8080] [--backend auto|picamera2|v4l2]
           [--device /dev/video0] [--camera-num 0]
           [--width 0] [--height 0] [--fps 5] [--jpeg-quality 85]
+          [--neopixel-pin D5] [--neopixel-count 32] [--no-neopixel]
 ```
+
+## Illuminator (NeoPixel ring)
+
+The server can drive a NeoPixel ring attached to the host — useful for lighting the DUTs uniformly when the camera is in a dark enclosure. Wiring assumption is an Adafruit STEMMA 3-pin connector (GND / +V / signal) on the eInk Bonnet or similar; the signal line lands on a Pi GPIO that's configurable per host.
+
+- `--neopixel-pin D5` — Blinka board pin name (e.g. `D5`, `D6`, `D10`, `D12`, `D18`, `D21`). Match this to whichever GPIO your STEMMA connector is wired to.
+- `--neopixel-count 32` — pixel count in the ring; 12/16/24/32 are common.
+- `--no-neopixel` — force-disable; useful on hosts without the ring or when running unprivileged.
+
+Dependencies on the camera host:
+
+```bash
+sudo apt install -y python3-pip
+sudo pip3 install --break-system-packages adafruit-blinka adafruit-circuitpython-neopixel
+```
+
+The default `neopixel` library uses DMA/PWM and requires root. The `hil-camera.service` unit runs as `pi`; switch to `User=root` on hosts where the illuminator is in use, or use `neopixel_spi` on GPIO10 to stay unprivileged (not yet wired in this server).
+
+## `/?full=1` snapshot
+
+The warm-pipeline `/` snapshot serves from the largest full-FoV mode the sensor can sustain continuously (2328×1748 on the IMX519). For sensor-native resolution (4656×3496 on the IMX519) call `GET /?full=1` — the server briefly stops the video pipeline, configures a still capture at native resolution, takes one shot, then restores the video pipeline. Expect 1–2 seconds per call. AF / lens state is preserved across the reconfigure.
 
 `--width 0 --height 0` (the default) means "use the camera's native resolution". For picamera2 backends the raw stream is always pinned to the sensor's full resolution so FoV stays full even when `--width/--height` are dialled down for lower bandwidth — without this, libcamera silently picks a centre-cropped sensor mode to match smaller main-stream sizes (the IMX519 at 1280×720 reads only the middle ~55%×41% of the active area).
 

@@ -58,6 +58,19 @@ class Backend(ABC):
     def supports_autofocus(self) -> bool:
         return False
 
+    def set_lens(self, *, mode: str, position: float | None = None) -> None:
+        """Switch between continuous AF and a fixed lens position.
+
+        ``mode`` is ``"auto"`` (continuous AF) or ``"manual"``. When manual,
+        ``position`` is a dioptre value in the sensor-specific range.
+        Default no-op; subclasses override.
+        """
+        raise NotImplementedError(f"{self.name} does not support lens control")
+
+    def get_lens(self) -> dict:
+        """Return the current lens mode and reported position."""
+        return {"mode": "unknown", "position": None}
+
     def start(self) -> None:
         self._open()
         self._thread = threading.Thread(
@@ -70,6 +83,15 @@ class Backend(ABC):
         if self._thread is not None:
             self._thread.join(timeout=2.0)
         self._close()
+
+    def capture_full_jpeg(self) -> bytes:
+        """Capture a one-shot snapshot at sensor-native resolution.
+
+        Default: not implemented (caller falls back to ``read_jpeg``).
+        Backends that can reconfigure to a still-capture mode for max
+        resolution should override.
+        """
+        raise NotImplementedError(f"{self.name} does not support full-res capture")
 
     def read_jpeg(self, max_age: float = 2.0) -> bytes:
         """Return the latest JPEG. Blocks briefly for the first frame."""

@@ -50,9 +50,48 @@ class Picamera2Backend(Backend):
         super().__init__(cfg)
         self._camera_num = camera_num
         self._cam = None
+        self._lens_mode = "auto"
+        self._manual_position: float | None = None
 
     def supports_autofocus(self) -> bool:
         return True
+
+    def set_lens(self, *, mode: str, position: float | None = None) -> None:
+        if self._cam is None:
+            raise RuntimeError("camera not open")
+        if mode == "auto":
+            self._cam.set_controls(
+                {
+                    "AfMode": controls.AfModeEnum.Continuous,
+                    "AfRange": controls.AfRangeEnum.Full,
+                }
+            )
+            self._lens_mode = "auto"
+            self._manual_position = None
+        elif mode == "manual":
+            if position is None:
+                raise ValueError("manual lens mode requires position")
+            self._cam.set_controls(
+                {"AfMode": controls.AfModeEnum.Manual, "LensPosition": float(position)}
+            )
+            self._lens_mode = "manual"
+            self._manual_position = float(position)
+        else:
+            raise ValueError(f"unknown lens mode: {mode!r}")
+
+    def get_lens(self) -> dict:
+        reported: float | None = None
+        if self._cam is not None:
+            try:
+                md = self._cam.capture_metadata()
+                reported = md.get("LensPosition")
+            except Exception:
+                reported = None
+        return {
+            "mode": getattr(self, "_lens_mode", "auto"),
+            "position": reported,
+            "manual_position": getattr(self, "_manual_position", None),
+        }
 
     def _open(self) -> None:
         if Picamera2 is None:
@@ -103,6 +142,62 @@ class Picamera2Backend(Backend):
             raise
         except Exception as exc:
             raise BackendUnavailable(f"picamera2 open failed: {exc}") from exc
+
+    def capture_full_jpeg(self) -> bytes:
+        """Reconfigure to sensor-native still mode, capture, restore video.
+
+        Costs ~1-2s per call (two reconfigures); guarded by ``self._lock``
+        so it won't race the grabber thread.
+        """
+        if self._cam is None:
+            raise RuntimeError("camera not open")
+        sensor_size = self._cam.sensor_resolution
+        # Save the current video config so we can return to it.
+        with self._lock:
+            self._cam.stop()
+            try:
+                still_cfg = self._cam.create_still_configuration(
+                    main={"size": sensor_size, "format": "RGB888"},
+                    raw={"size": sensor_size},
+                )
+                self._cam.configure(still_cfg)
+                self._cam.start()
+                buf = io.BytesIO()
+                self._cam.options["quality"] = self.cfg.jpeg_quality
+                self._cam.capture_file(buf, format="jpeg")
+                jpeg = buf.getvalue()
+            finally:
+                # Always restore the video pipeline, even on failure, so
+                # subsequent /  requests don't hang on a stopped camera.
+                self._cam.stop()
+                video_cfg = self._cam.create_video_configuration(
+                    main={
+                        "size": (self.cfg.width, self.cfg.height),
+                        "format": "RGB888",
+                    },
+                    raw={"size": _smallest_full_fov_mode(self._cam, sensor_size)},
+                )
+                self._cam.configure(video_cfg)
+                # Re-apply AF / lens controls before start so they're live
+                # from frame 0.
+                if "AfMode" in self._cam.camera_controls:
+                    if self._lens_mode == "manual" and self._manual_position is not None:
+                        self._cam.set_controls(
+                            {
+                                "AfMode": controls.AfModeEnum.Manual,
+                                "LensPosition": self._manual_position,
+                            }
+                        )
+                    else:
+                        self._cam.set_controls(
+                            {
+                                "AfMode": controls.AfModeEnum.Continuous,
+                                "AfRange": controls.AfRangeEnum.Full,
+                                "AfSpeed": controls.AfSpeedEnum.Fast,
+                            }
+                        )
+                self._cam.start()
+        return jpeg
 
     def _grab_jpeg(self) -> bytes:
         assert self._cam is not None
