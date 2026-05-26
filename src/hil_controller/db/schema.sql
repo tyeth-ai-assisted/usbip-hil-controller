@@ -78,7 +78,8 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 
 -- Multi-VID/PID per device (bootloader, runtime, dfu, msc, ...).
--- Surrogate PK; (device_id, vid, pid, iserial) uniquely identifies one observation.
+-- Surrogate PK; uq_device_usb_ids_combo enforces dedup including NULL iserials
+-- via COALESCE (SQLite UNIQUE constraints treat NULLs as distinct, which we don't want).
 CREATE TABLE IF NOT EXISTS device_usb_ids (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id        TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -91,9 +92,10 @@ CREATE TABLE IF NOT EXISTS device_usb_ids (
     first_seen_at    TEXT NOT NULL,
     last_seen_at     TEXT NOT NULL,
     learned_from_job TEXT,
-    source           TEXT NOT NULL DEFAULT 'manual',    -- manual|seeder|learn-job|passive|migration
-    UNIQUE (device_id, vid, pid, iserial)
+    source           TEXT NOT NULL DEFAULT 'manual'     -- manual|seeder|learn-job|passive|migration
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_device_usb_ids_combo
+    ON device_usb_ids(device_id, vid, pid, COALESCE(iserial, ''));
 CREATE INDEX IF NOT EXISTS idx_device_usb_ids_lookup ON device_usb_ids(vid, pid);
 CREATE INDEX IF NOT EXISTS idx_device_usb_ids_device ON device_usb_ids(device_id);
 

@@ -571,6 +571,10 @@ async def create_device(
     qr_identifier: Annotated[str, Form()] = "",
     manual_focus_dioptres: Annotated[str, Form()] = "",
     illuminator_brightness: Annotated[str, Form()] = "",
+    hub_host_id: Annotated[str, Form()] = "",
+    hub_port_path: Annotated[str, Form()] = "",
+    solenoid_channel: Annotated[str, Form()] = "",
+    usb_serial: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
@@ -585,18 +589,22 @@ async def create_device(
     usb_json = json.dumps({"vid": usb_vid, "pid": usb_pid}) if (usb_vid or usb_pid) else None
     focus_val = _parse_optional_float(manual_focus_dioptres)
     brightness_val = _parse_optional_int(illuminator_brightness)
+    solenoid_val = _parse_optional_int(solenoid_channel)
+    hub_host_val = hub_host_id or host_id  # default to device host
     async with get_db(db_path) as db:
         try:
             await db.execute(
                 """INSERT INTO devices
                    (id, host_id, kind, model, capabilities_json, usb_json,
                     pool, status, serial_port, flasher, camera_id, qr_identifier,
-                    manual_focus_dioptres, illuminator_brightness)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    manual_focus_dioptres, illuminator_brightness,
+                    hub_host_id, hub_port_path, solenoid_channel, usb_serial)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (id, host_id, kind, model, json.dumps(_parse_caps(capabilities)),
                  usb_json, pool, status, serial_port or None, flasher or None,
                  camera_id or None, qr_identifier or None,
-                 focus_val, brightness_val),
+                 focus_val, brightness_val,
+                 hub_host_val, hub_port_path or None, solenoid_val, usb_serial or None),
             )
             await db.commit()
         except Exception as exc:
@@ -635,6 +643,10 @@ async def update_device(
     qr_identifier: Annotated[str, Form()] = "",
     manual_focus_dioptres: Annotated[str, Form()] = "",
     illuminator_brightness: Annotated[str, Form()] = "",
+    hub_host_id: Annotated[str, Form()] = "",
+    hub_port_path: Annotated[str, Form()] = "",
+    solenoid_channel: Annotated[str, Form()] = "",
+    usb_serial: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
@@ -642,6 +654,8 @@ async def update_device(
     usb_json = json.dumps({"vid": usb_vid, "pid": usb_pid}) if (usb_vid or usb_pid) else None
     focus_val = _parse_optional_float(manual_focus_dioptres)
     brightness_val = _parse_optional_int(illuminator_brightness)
+    solenoid_val = _parse_optional_int(solenoid_channel)
+    hub_host_val = hub_host_id or host_id
     async with get_db(db_path) as db:
         async with db.execute("SELECT id FROM devices WHERE id = ?", (device_id,)) as cur:
             if await cur.fetchone() is None:
@@ -650,11 +664,15 @@ async def update_device(
             """UPDATE devices SET host_id=?, kind=?, model=?, capabilities_json=?,
                usb_json=?, pool=?, status=?, serial_port=?, flasher=?,
                camera_id=?, qr_identifier=?,
-               manual_focus_dioptres=?, illuminator_brightness=? WHERE id=?""",
+               manual_focus_dioptres=?, illuminator_brightness=?,
+               hub_host_id=?, hub_port_path=?, solenoid_channel=?, usb_serial=?
+               WHERE id=?""",
             (host_id, kind, model, json.dumps(_parse_caps(capabilities)),
              usb_json, pool, status, serial_port or None, flasher or None,
              camera_id or None, qr_identifier or None,
-             focus_val, brightness_val, device_id),
+             focus_val, brightness_val,
+             hub_host_val, hub_port_path or None, solenoid_val, usb_serial or None,
+             device_id),
         )
         await db.commit()
     if camera_id:
@@ -679,6 +697,101 @@ async def delete_device(
         await db.execute("DELETE FROM devices WHERE id = ?", (device_id,))
         await db.commit()
     return HTMLResponse("")
+
+
+# ---------------------------------------------------------------------------
+# Device USB IDs — HTMX partials
+# ---------------------------------------------------------------------------
+
+
+async def _usb_ids_for(db_path: str, device_id: str) -> list[dict]:
+    async with get_db(db_path) as db:
+        async with db.execute(
+            "SELECT * FROM device_usb_ids WHERE device_id = ? ORDER BY id",
+            (device_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def _render_usb_ids(request: Request, device_id: str, rows: list[dict], error: str = "") -> HTMLResponse:
+    return _tr(
+        request, "usb_ids_list.html",
+        {"device_id": device_id, "rows": rows, "error": error},
+    )
+
+
+@router.get("/devices/{device_id}/usb-ids", response_class=HTMLResponse, include_in_schema=False)
+async def ui_list_device_usb_ids(
+    request: Request, device_id: str, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    rows = await _usb_ids_for(db_path, device_id)
+    return _render_usb_ids(request, device_id, rows)
+
+
+@router.post("/devices/{device_id}/usb-ids", response_class=HTMLResponse, include_in_schema=False)
+async def ui_add_device_usb_id(
+    request: Request,
+    device_id: str,
+    hil_token: str = Cookie(default=""),
+    vid: Annotated[str, Form()] = "",
+    pid: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = "unknown",
+    description: Annotated[str, Form()] = "",
+    iserial: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    error = ""
+    vid_n = (vid or "").strip().lower()
+    pid_n = (pid or "").strip().lower()
+    if not vid_n or not pid_n:
+        error = "VID and PID are required"
+    else:
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db(db_path) as db:
+            async with db.execute("SELECT 1 FROM devices WHERE id=?", (device_id,)) as cur:
+                if await cur.fetchone() is None:
+                    return HTMLResponse("Device not found", status_code=404)
+            try:
+                await db.execute(
+                    "INSERT INTO device_usb_ids "
+                    "(device_id, vid, pid, role, iserial, description, "
+                    " first_seen_at, last_seen_at, source) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual')",
+                    (device_id, vid_n, pid_n, role or "unknown",
+                     iserial or None, description or None, now, now),
+                )
+                await db.commit()
+            except Exception as exc:
+                error = f"could not add: {exc}"
+    rows = await _usb_ids_for(db_path, device_id)
+    return _render_usb_ids(request, device_id, rows, error=error)
+
+
+@router.delete(
+    "/devices/{device_id}/usb-ids/{row_id}",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def ui_delete_device_usb_id(
+    request: Request, device_id: str, row_id: int, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        await db.execute(
+            "DELETE FROM device_usb_ids WHERE id = ? AND device_id = ?",
+            (row_id, device_id),
+        )
+        await db.commit()
+    rows = await _usb_ids_for(db_path, device_id)
+    return _render_usb_ids(request, device_id, rows)
 
 
 @router.post("/devices/{device_id}/camera/preview", include_in_schema=False)

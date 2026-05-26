@@ -1,12 +1,14 @@
-"""GET /v1/devices, GET /v1/devices/{id}"""
+"""GET /v1/devices, GET /v1/devices/{id}, plus device_usb_ids CRUD + lookup."""
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+import aiosqlite
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from pydantic import BaseModel, Field, field_validator
 
 from hil_controller.auth.principal import Principal
 from hil_controller.auth.tokens import require_auth
@@ -14,6 +16,17 @@ from hil_controller.db.connection import get_db
 
 router = APIRouter(prefix="/v1/devices", tags=["devices"])
 Auth = Annotated[Principal, Depends(require_auth)]
+
+
+_VALID_ROLES = {"runtime", "bootloader", "dfu", "msc", "cdc", "unknown"}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _norm_id(s: str) -> str:
+    return (s or "").strip().lower()
 
 
 class DeviceSummary(BaseModel):
@@ -138,3 +151,165 @@ async def get_device(request: Request, device_id: str, _auth: Auth) -> DeviceDet
         host=dict(host_row) if host_row else None,
         auxes=[dict(a) for a in aux_rows],
     )
+
+
+# ---------------------------------------------------------------------------
+# device_usb_ids CRUD + lookup
+# ---------------------------------------------------------------------------
+
+
+class UsbIdIn(BaseModel):
+    vid: str = Field(..., min_length=1)
+    pid: str = Field(..., min_length=1)
+    role: str = "unknown"
+    iserial: str | None = None
+    description: str | None = None
+    bcd_device: str | None = None
+
+    @field_validator("vid", "pid")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("must be non-empty")
+        return v.lower()
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, v: str) -> str:
+        v = (v or "unknown").strip().lower()
+        if v not in _VALID_ROLES:
+            raise ValueError(f"role must be one of {sorted(_VALID_ROLES)}")
+        return v
+
+
+class UsbIdOut(BaseModel):
+    id: int
+    device_id: str
+    vid: str
+    pid: str
+    role: str
+    iserial: str | None
+    description: str | None
+    bcd_device: str | None
+    first_seen_at: str
+    last_seen_at: str
+    learned_from_job: str | None
+    source: str
+
+
+class UsbLookupIn(BaseModel):
+    vid: str
+    pid: str
+    iserial: str | None = None
+
+    @field_validator("vid", "pid")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("must be non-empty")
+        return v.lower()
+
+
+async def _require_device(db: aiosqlite.Connection, device_id: str) -> None:
+    async with db.execute("SELECT 1 FROM devices WHERE id = ?", (device_id,)) as cur:
+        if await cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Device not found")
+
+
+def _row_to_out(row: aiosqlite.Row) -> UsbIdOut:
+    return UsbIdOut(
+        id=row["id"],
+        device_id=row["device_id"],
+        vid=row["vid"],
+        pid=row["pid"],
+        role=row["role"],
+        iserial=row["iserial"],
+        description=row["description"],
+        bcd_device=row["bcd_device"],
+        first_seen_at=row["first_seen_at"],
+        last_seen_at=row["last_seen_at"],
+        learned_from_job=row["learned_from_job"],
+        source=row["source"],
+    )
+
+
+@router.get("/{device_id}/usb-ids", response_model=list[UsbIdOut])
+async def list_device_usb_ids(
+    request: Request, device_id: str, _auth: Auth
+) -> list[UsbIdOut]:
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        await _require_device(db, device_id)
+        async with db.execute(
+            "SELECT * FROM device_usb_ids WHERE device_id = ? ORDER BY id",
+            (device_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [_row_to_out(r) for r in rows]
+
+
+@router.post("/{device_id}/usb-ids", response_model=UsbIdOut, status_code=201)
+async def add_device_usb_id(
+    request: Request, device_id: str, body: UsbIdIn, _auth: Auth
+) -> UsbIdOut:
+    db_path: str = request.app.state.db_path
+    now = _now_iso()
+    async with get_db(db_path) as db:
+        await _require_device(db, device_id)
+        try:
+            cur = await db.execute(
+                "INSERT INTO device_usb_ids "
+                "(device_id, vid, pid, role, iserial, description, bcd_device, "
+                " first_seen_at, last_seen_at, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual')",
+                (device_id, body.vid, body.pid, body.role, body.iserial,
+                 body.description, body.bcd_device, now, now),
+            )
+            await db.commit()
+            new_id = cur.lastrowid
+        except aiosqlite.IntegrityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"duplicate usb id: {exc}",
+            )
+        async with db.execute(
+            "SELECT * FROM device_usb_ids WHERE id = ?", (new_id,)
+        ) as cur:
+            row = await cur.fetchone()
+    return _row_to_out(row)
+
+
+@router.delete("/{device_id}/usb-ids/{row_id}", status_code=204)
+async def delete_device_usb_id(
+    request: Request, device_id: str, row_id: int, _auth: Auth
+) -> Response:
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        async with db.execute(
+            "SELECT id FROM device_usb_ids WHERE id = ? AND device_id = ?",
+            (row_id, device_id),
+        ) as cur:
+            if await cur.fetchone() is None:
+                raise HTTPException(status_code=404, detail="usb-id row not found")
+        await db.execute("DELETE FROM device_usb_ids WHERE id = ?", (row_id,))
+        await db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/lookup-by-usb", response_model=list[UsbIdOut])
+async def lookup_by_usb(
+    request: Request, body: UsbLookupIn, _auth: Auth
+) -> list[UsbIdOut]:
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        sql = "SELECT * FROM device_usb_ids WHERE vid = ? AND pid = ?"
+        params: list[Any] = [body.vid, body.pid]
+        if body.iserial is not None:
+            sql += " AND COALESCE(iserial,'') = ?"
+            params.append(body.iserial)
+        sql += " ORDER BY last_seen_at DESC, id"
+        async with db.execute(sql, params) as cur:
+            rows = await cur.fetchall()
+    return [_row_to_out(r) for r in rows]

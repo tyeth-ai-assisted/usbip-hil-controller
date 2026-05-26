@@ -133,10 +133,13 @@ async def _migrate(db: aiosqlite.Connection) -> None:
                 first_seen_at    TEXT NOT NULL,
                 last_seen_at     TEXT NOT NULL,
                 learned_from_job TEXT,
-                source           TEXT NOT NULL DEFAULT 'manual',
-                UNIQUE (device_id, vid, pid, iserial)
+                source           TEXT NOT NULL DEFAULT 'manual'
             )
             """
+        )
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_device_usb_ids_combo "
+            "ON device_usb_ids(device_id, vid, pid, COALESCE(iserial, ''))"
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_device_usb_ids_lookup ON device_usb_ids(vid, pid)"

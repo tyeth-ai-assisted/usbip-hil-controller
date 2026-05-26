@@ -50,12 +50,40 @@
         <input type="text" id="f-dev-flasher" name="flasher" value="{{ device.flasher or '' if device else '' }}" placeholder="esptool, uf2-msc, …">
       </div>
       <div class="form-group">
-        <label for="f-dev-usb-vid">USB VID</label>
+        <label for="f-dev-usb-vid">USB VID (primary, legacy)</label>
         <input type="text" id="f-dev-usb-vid" name="usb_vid" value="{{ device.usb_vid or '' if device else '' }}" placeholder="239a">
+        <span class="form-hint">Use the multi-ID table below for additional VIDs/PIDs (bootloader, runtime, ...).</span>
       </div>
       <div class="form-group">
-        <label for="f-dev-usb-pid">USB PID</label>
+        <label for="f-dev-usb-pid">USB PID (primary, legacy)</label>
         <input type="text" id="f-dev-usb-pid" name="usb_pid" value="{{ device.usb_pid or '' if device else '' }}" placeholder="8143">
+      </div>
+      <div class="form-group">
+        <label for="f-dev-hub-host">Hub host</label>
+        <select id="f-dev-hub-host" name="hub_host_id">
+          <option value="">— defaults to device host —</option>
+          {% for h in hosts %}
+          <option value="{{ h.id }}" {% if device and device.hub_host_id == h.id %}selected{% endif %}>{{ h.id }}</option>
+          {% endfor %}
+        </select>
+        <span class="form-hint">usbip server hosting this device (defaults to the device's host).</span>
+      </div>
+      <div class="form-group">
+        <label for="f-dev-hub-port">Hub port path</label>
+        <input type="text" id="f-dev-hub-port" name="hub_port_path" value="{{ device.hub_port_path or '' if device else '' }}" placeholder="1-1.1.3">
+        <span class="form-hint">sysfs / usbip bus-id (stable identity across resets).</span>
+      </div>
+      <div class="form-group">
+        <label for="f-dev-solenoid">Solenoid channel</label>
+        <input type="number" id="f-dev-solenoid" name="solenoid_channel" min="0" max="7" step="1"
+               value="{{ device.solenoid_channel if device and device.solenoid_channel is not none else '' }}"
+               placeholder="0–7">
+        <span class="form-hint">MCP23017 channel driving this port's power button.</span>
+      </div>
+      <div class="form-group">
+        <label for="f-dev-usb-serial">USB iSerial</label>
+        <input type="text" id="f-dev-usb-serial" name="usb_serial" value="{{ device.usb_serial or '' if device else '' }}" placeholder="optional">
+        <span class="form-hint">Used to disambiguate identical boards.</span>
       </div>
       <div class="form-group">
         <label for="f-dev-status">Status</label>
@@ -226,6 +254,54 @@
         hx-get="/ui/empty" hx-target="#form-panel" hx-swap="innerHTML">Cancel</button>
     </div>
   </form>
+
+  {% if device %}
+  <hr class="section-sep">
+  <h2>USB IDs</h2>
+  <p class="form-hint" style="margin-bottom:0.5rem;">
+    Each row is one VID/PID this device presents — bootloader, runtime, DFU, MSC, etc.
+    Use the form below to add manually; the controller also learns automatically
+    during exclusive-access jobs (PR4/PR5).
+  </p>
+  <div id="usb-ids-panel-{{ device.id }}"
+       hx-get="/ui/devices/{{ device.id }}/usb-ids"
+       hx-trigger="load"
+       hx-swap="innerHTML">
+    Loading USB IDs…
+  </div>
+
+  <form class="usb-id-add-form"
+        hx-post="/ui/devices/{{ device.id }}/usb-ids"
+        hx-target="#usb-ids-panel-{{ device.id }}"
+        hx-swap="innerHTML"
+        style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end;">
+    <div class="form-group" style="margin:0;">
+      <label>VID</label>
+      <input type="text" name="vid" required placeholder="239a" style="width:5rem;">
+    </div>
+    <div class="form-group" style="margin:0;">
+      <label>PID</label>
+      <input type="text" name="pid" required placeholder="8053" style="width:5rem;">
+    </div>
+    <div class="form-group" style="margin:0;">
+      <label>Role</label>
+      <select name="role">
+        {% for r in ['runtime','bootloader','dfu','msc','cdc','unknown'] %}
+        <option value="{{ r }}" {% if r == 'unknown' %}selected{% endif %}>{{ r }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group" style="margin:0;flex:1;min-width:8rem;">
+      <label>Description</label>
+      <input type="text" name="description" placeholder="optional">
+    </div>
+    <div class="form-group" style="margin:0;">
+      <label>iSerial</label>
+      <input type="text" name="iserial" placeholder="optional" style="width:9rem;">
+    </div>
+    <button type="submit" class="btn btn-sm btn-primary">Add USB ID</button>
+  </form>
+  {% endif %}
 </div>
 
 <script>
