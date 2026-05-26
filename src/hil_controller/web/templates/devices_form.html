@@ -94,11 +94,13 @@
         <p style="margin:0 0 0.4rem;font-size:0.85rem;color:#555;">Drag to draw ROI &middot; blue&nbsp;=&nbsp;saved &middot; orange&nbsp;=&nbsp;pending &middot; auto-refreshes&nbsp;10&nbsp;s</p>
         <canvas id="roi-canvas-{{ device.id }}" width="320" height="240"
                 style="display:block;border-radius:6px;border:1px solid #ddd;cursor:crosshair;"></canvas>
-        <div style="margin-top:0.4rem;display:flex;gap:0.5rem;">
+        <div style="margin-top:0.4rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
           <button type="button" class="btn btn-sm btn-outline"
                   onclick="openRoiModal('{{ device.id }}')">Large Preview</button>
           <button type="button" class="btn btn-sm btn-outline"
                   onclick="refreshSnap('{{ device.id }}')">Refresh</button>
+          <button type="button" class="btn btn-sm btn-outline" id="crop-toggle-{{ device.id }}"
+                  onclick="toggleCrop('{{ device.id }}')" title="Show ROI-cropped image instead of full frame">Crop to ROI</button>
         </div>
       </div>
 
@@ -184,6 +186,7 @@
   var mctx = modalCanvas ? modalCanvas.getContext('2d') : null;
 
   var snapUrl = '/ui/devices/' + deviceId + '/snapshot';
+  var cropEnabled = false;
   var img = new Image();
   var imgLoaded = false;
   var imgW = 0, imgH = 0;
@@ -272,7 +275,7 @@
   }
 
   function loadSnap() {
-    img.src = snapUrl + '?_t=' + Date.now();
+    img.src = snapUrl + '?_t=' + Date.now() + (cropEnabled ? '&crop=1' : '');
   }
 
   img.onload = function() {
@@ -293,6 +296,17 @@
 
   // Globals used from HTML onclick / external async functions
   window.refreshSnap = function(devId) { if (devId === deviceId) loadSnap(); };
+
+  window.toggleCrop = function(devId) {
+    if (devId !== deviceId) return;
+    cropEnabled = !cropEnabled;
+    var btn = document.getElementById('crop-toggle-' + deviceId);
+    if (btn) {
+      btn.textContent = cropEnabled ? 'Full Frame' : 'Crop to ROI';
+      btn.style.fontWeight = cropEnabled ? 'bold' : '';
+    }
+    loadSnap();
+  };
 
   window.undoRoi = function(devId) {
     if (devId !== deviceId) return;

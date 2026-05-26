@@ -509,7 +509,7 @@ async def device_snapshot_proxy(
     except Exception:
         return Response(status_code=503)
 
-    if row["x"] is not None:
+    if row["x"] is not None and request.query_params.get("crop") == "1":
         try:
             import cv2
             import numpy as np
@@ -517,12 +517,17 @@ async def device_snapshot_proxy(
             arr = np.frombuffer(frame_bytes, dtype=np.uint8)
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if img is not None:
-                x, y, w, h = int(row["x"]), int(row["y"]), int(row["w"]), int(row["h"])
+                ih, iw = img.shape[:2]
+                x = max(0, min(int(row["x"]), iw - 1))
+                y = max(0, min(int(row["y"]), ih - 1))
+                w = max(1, min(int(row["w"]), iw - x))
+                h = max(1, min(int(row["h"]), ih - y))
                 crop = img[y : y + h, x : x + w]
-                _, buf = cv2.imencode(".jpg", crop)
-                return Response(content=buf.tobytes(), media_type="image/jpeg")
-        except ImportError:
-            pass
+                ok, buf = cv2.imencode(".jpg", crop)
+                if ok:
+                    return Response(content=buf.tobytes(), media_type="image/jpeg")
+        except Exception:
+            pass  # fall through to return full frame
 
     return Response(content=frame_bytes, media_type="image/jpeg")
 
