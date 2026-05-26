@@ -25,8 +25,13 @@ Pi CSI host (e.g. rpi-displays):
 
 ```bash
 sudo apt install -y python3-picamera2
-# clone repo to /home/pi/hil-camera-server (or symlink server.py + backends/ there)
-sudo cp tools/camera-server/hil-camera.service /etc/systemd/system/
+git clone https://github.com/Gundry-Consultancy/usbip-hil-controller.git ~/usbip-hil-controller
+
+# IMX519 only: graft the AF block into libcamera's tuning file. Upstream
+# omits it even though the IPA library has the AF algorithm compiled in.
+sudo python3 ~/usbip-hil-controller/tools/camera-server/tuning/imx519-af-patch.py
+
+sudo cp ~/usbip-hil-controller/tools/camera-server/hil-camera.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now hil-camera
 ```
@@ -51,3 +56,7 @@ server.py [--port 8080] [--backend auto|picamera2|v4l2]
 Each backend opens the camera once at startup and runs a daemon grabber thread that writes the latest JPEG into a single-slot buffer. HTTP handlers serve from that buffer — no per-request camera open, no per-request AF cycle. AF runs continuously inside the camera's own pipeline (libcamera for Pi CSI, UVC controls for webcams), so snapshots stay sharp without explicit triggering.
 
 The `/stream` endpoint avoids re-sending identical frames by waiting for a new timestamp before emitting the next multipart part.
+
+## IMX519 autofocus footnote
+
+Pi OS ships an `imx519.json` tuning file with no `rpi.af` algorithm block — but the libcamera IPA library does have the AF algorithm code compiled in. Symptom: `set_controls({"AfMode": Continuous})` emits `WARN IPARPI ipa_base.cpp: Could not set AF_MODE - no AF algorithm` and the lens never moves. `tuning/imx519-af-patch.py` adds an AF block (lens map `[0.0, 0, 32.0, 1023]`, matching the Arducam IMX519 16MP module) and continuous AF starts working immediately on next libcamera open. The patch is idempotent; the original tuning is saved as `imx519.json.preaf`.
