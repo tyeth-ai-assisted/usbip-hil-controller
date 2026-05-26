@@ -313,3 +313,74 @@ async def lookup_by_usb(
         async with db.execute(sql, params) as cur:
             rows = await cur.fetchall()
     return [_row_to_out(r) for r in rows]
+
+
+class LearnUsbIn(BaseModel):
+    include_reset_cycle: bool = False
+    job_id: str | None = None
+
+
+@router.post("/{device_id}/learn-usb", response_model=list[UsbIdOut])
+async def learn_device_usb(
+    request: Request,
+    device_id: str,
+    _auth: Auth,
+    body: LearnUsbIn | None = None,
+) -> list[UsbIdOut]:
+    """Active VID/PID fingerprint via depower/repower of the device's hub port.
+
+    Requires the device to have `hub_host_id`, `hub_port_path`, and (for
+    the depower step) `solenoid_channel` populated. Acquires an
+    `exclusive_hub` lease for the duration.
+    """
+    from hil_controller.adapters.usb_fingerprint import (
+        FingerprintError, UsbFingerprintAdapter,
+    )
+    from hil_controller.queue.leases import LeaseConflict
+
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        await _require_device(db, device_id)
+
+    body = body or LearnUsbIn()
+    # Production wiring of hub + scan_fn is best provided via app.state
+    # (set by the deployment). In CI/tests, monkeypatch the adapter's
+    # learn() to a fake. Here we fail clearly if no provider configured.
+    provider = getattr(request.app.state, "usb_fingerprint_provider", None)
+    if provider is None:
+        # Default: instantiate with placeholders. Tests monkeypatch .learn,
+        # so the placeholders never run.
+        adapter = UsbFingerprintAdapter(
+            db_path=db_path,
+            hub=_NoopHub(),
+            scan_fn=lambda: [],
+        )
+    else:
+        adapter = provider(db_path=db_path)
+    try:
+        rows = await adapter.learn(
+            device_id=device_id,
+            job_id=body.job_id,
+            include_reset_cycle=body.include_reset_cycle,
+        )
+    except FingerprintError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except LeaseConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return [UsbIdOut(**r) for r in rows]
+
+
+class _NoopHub:
+    """Stand-in hub used when no production provider is wired in.
+
+    All methods are async no-ops; this lets the endpoint still execute
+    the workflow and return whatever the (also empty) scan reports.
+    """
+    async def all_off(self) -> None:
+        pass
+
+    async def port_on(self, channel: int) -> None:
+        pass
+
+    async def port_off(self, channel: int, **kwargs) -> None:
+        pass

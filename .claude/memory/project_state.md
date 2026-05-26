@@ -69,6 +69,37 @@ API: GET/list cameras, snapshot, GET/PUT/DELETE ROI per device, POST calibrate+s
 Devices form: camera_id + qr_identifier fields + live camera panel with snapshot thumbnail.
 47 new tests. opencv-python-headless + pyzbar + numpy as optional [camera] deps.
 
+**Arduino WipperSnapper Test job (done 2026-05-25):**
+- New `GET /ui/jobs/new-arduino-ws` + `POST /ui/jobs/arduino-ws` routes in router.py
+- Template `job_new_arduino_ws.html` — WipperSnapper Arduino ref, protoMQ ref + play-script
+  selector, MCU device picker, MQTT settings, extra setup, test command, timeouts.
+- The job clones WipperSnapper Arduino at `wippersnapper_ref`, prepends
+  `git clone … protomq {protomq_ref}` to setup, runs pytest against it.
+- Config: `HIL_WIPPERSNAPPER_ARDUINO_REPO`, `HIL_PROTOMQ_REPO`, `HIL_PROTOMQ_DEFAULT_REF`
+  (all default sensibly). Empty ref falls back to "main" / config default.
+- jobs.html: "+ Arduino WS Test" button alongside existing "+ Python" / "+ Arduino Flash".
+- 3 new tests (42 web UI tests pass, 187 total).
+
+**M6 — USB identity (done 2026-05-26):**
+- `device_usb_ids` (surrogate PK; UNIQUE expression index over
+  `COALESCE(iserial,'')`). Roles: runtime|bootloader|dfu|msc|cdc|unknown.
+- `devices` gained `hub_host_id`, `hub_port_path`, `solenoid_channel`,
+  `usb_serial`. Topology YAML `usb_ids:` list seeded; legacy `usb:` still
+  works; migration backfills from `usb_json`.
+- REST: `/v1/devices/{id}/usb-ids` GET/POST/DELETE,
+  `/v1/devices/lookup-by-usb`, `/v1/devices/{id}/learn-usb`.
+- HTMX UI: list editor + Learn USB IDs button (optional reset cycle).
+- `device_leases` + `queue/leases.py` (BEGIN IMMEDIATE, exclusive_device
+  vs exclusive_hub conflict matrix). `/v1/leases` GET/POST/DELETE.
+  Startup sweep releases crashed-job leases. Scheduler acquires per job.
+- `adapters/usb_scan.py` (parse_usbip_list, learn_once, passive_learn_loop)
+  runs as a background task during exclusive leases; auto-records
+  unseen VID/PIDs with source='passive'.
+- `adapters/usb_fingerprint.py` (UsbFingerprintAdapter.learn): acquires
+  exclusive_hub, depowers via solenoid, repowers target port, captures
+  VID/PIDs; optional reset cycle splits bootloader vs runtime.
+- 56 new tests across PR1–PR5; **275 total pass**.
+
 **Not yet done:**
 - M2 remainder: GitHub OIDC verifier, policy file
 - M2.5: secret profiles YAML, per-job secrets materialisation, artifact sanitisation

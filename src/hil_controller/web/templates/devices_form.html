@@ -260,9 +260,28 @@
   <h2>USB IDs</h2>
   <p class="form-hint" style="margin-bottom:0.5rem;">
     Each row is one VID/PID this device presents — bootloader, runtime, DFU, MSC, etc.
-    Use the form below to add manually; the controller also learns automatically
-    during exclusive-access jobs (PR4/PR5).
+    Add manually below, or run a Learn pass to capture by depower/repower.
   </p>
+
+  <div style="margin-bottom:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+    <button type="button" class="btn btn-sm btn-primary"
+            hx-post="/ui/devices/{{ device.id }}/learn-usb"
+            hx-target="#usb-ids-panel-{{ device.id }}"
+            hx-swap="innerHTML"
+            hx-indicator="#learn-spinner-{{ device.id }}"
+            hx-confirm="Run an active USB learn pass? This will depower the hub briefly.">
+      Learn USB IDs
+    </button>
+    <label style="font-size:0.85rem;">
+      <input type="checkbox" id="learn-reset-{{ device.id }}"
+             hx-include="this"
+             onchange="window._learnResetCycle_{{ device.id }} = this.checked;">
+      include reset cycle (bootloader + runtime)
+    </label>
+    <span id="learn-spinner-{{ device.id }}" class="htmx-indicator">running…</span>
+    <span class="form-hint">Requires hub_port_path + solenoid_channel; acquires an exclusive_hub lease.</span>
+  </div>
+
   <div id="usb-ids-panel-{{ device.id }}"
        hx-get="/ui/devices/{{ device.id }}/usb-ids"
        hx-trigger="load"

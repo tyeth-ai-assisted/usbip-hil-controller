@@ -1474,7 +1474,36 @@ Status key: **[done]** shipped, **[partial]** partially implemented, **[open]** 
   Python Wippersnapper submodule (OQ10); protobuf decoding for MQTT messages;
   `GET /v1/jobs/{id}/logs` non-blocking endpoint.
 
-Past M5 we revisit dynamic hardware switching, GitHub check-run posting,
+- **M6 — USB identity** [done] — multi-VID/PID per device + hub-port identity
+  + exclusivity leases + active/passive USB-ID learn.
+  - `device_usb_ids` table (surrogate PK + `UNIQUE (device_id, vid, pid,
+    COALESCE(iserial, ''))` expression index — NULL iserials dedup
+    correctly). Roles: `runtime | bootloader | dfu | msc | cdc | unknown`.
+  - New `devices` columns: `hub_host_id` (defaults to `host_id`),
+    `hub_port_path` (sysfs bus-id, the *real* identity), `solenoid_channel`,
+    `usb_serial`.
+  - Topology YAML `usb_ids:` list (back-compat: legacy `usb:` block still
+    seeds one row). Migration backfills any pre-existing `usb_json`.
+  - REST: `GET/POST/DELETE /v1/devices/{id}/usb-ids`,
+    `POST /v1/devices/lookup-by-usb`, `POST /v1/devices/{id}/learn-usb`.
+  - HTMX devices form: list editor, add/delete row, Learn-USB button
+    (with optional reset cycle for bootloader+runtime split).
+  - `device_leases` table + `queue/leases.py` primitive (atomic acquire
+    inside `BEGIN IMMEDIATE`; kinds `exclusive_device` / `exclusive_hub`
+    with the full conflict matrix). `GET/POST/DELETE /v1/leases`.
+    Startup sweep releases orphan leases of crashed jobs. Scheduler
+    acquires `exclusive_device` per job; releases in finally.
+  - `adapters/usb_scan.py`: `parse_usbip_list`, `learn_once`,
+    `passive_learn_loop`. Scheduler runs the loop as a background task
+    during the lease so any unseen VID/PID enumerating on the device's
+    `hub_port_path` is auto-recorded with `source='passive'`.
+  - `adapters/usb_fingerprint.py`: `UsbFingerprintAdapter.learn` —
+    acquires `exclusive_hub`, depowers via solenoid, repowers the target
+    port, captures VID/PIDs; optional reset cycle splits role into
+    bootloader vs runtime.
+  - 56 new tests (PR1–PR5); 275 total pass.
+
+Past M6 we revisit dynamic hardware switching, GitHub check-run posting,
 and the SSH → agent transport upgrade (open question 11) based on what
 we've learned.
 

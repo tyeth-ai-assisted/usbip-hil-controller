@@ -794,6 +794,65 @@ async def ui_delete_device_usb_id(
     return _render_usb_ids(request, device_id, rows)
 
 
+@router.post(
+    "/devices/{device_id}/learn-usb",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def ui_learn_usb(
+    request: Request,
+    device_id: str,
+    hil_token: str = Cookie(default=""),
+    include_reset_cycle: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    """HTMX endpoint: run UsbFingerprintAdapter.learn and refresh the panel."""
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+
+    from hil_controller.adapters.usb_fingerprint import (
+        FingerprintError, UsbFingerprintAdapter,
+    )
+    from hil_controller.queue.leases import LeaseConflict
+
+    error = ""
+    provider = getattr(request.app.state, "usb_fingerprint_provider", None)
+    try:
+        if provider is None:
+            adapter = UsbFingerprintAdapter(
+                db_path=db_path,
+                hub=_LearnNoopHub(),
+                scan_fn=lambda: [],
+            )
+        else:
+            adapter = provider(db_path=db_path)
+        await adapter.learn(
+            device_id=device_id,
+            job_id=None,
+            include_reset_cycle=bool(include_reset_cycle),
+        )
+    except FingerprintError as exc:
+        error = f"{exc}"
+    except LeaseConflict as exc:
+        error = f"hub busy: {exc}"
+    except Exception as exc:
+        error = f"learn failed: {exc}"
+
+    rows = await _usb_ids_for(db_path, device_id)
+    return _render_usb_ids(request, device_id, rows, error=error)
+
+
+class _LearnNoopHub:
+    async def all_off(self) -> None:
+        pass
+
+    async def port_on(self, channel: int) -> None:
+        pass
+
+    async def port_off(self, channel: int, **kwargs) -> None:
+        pass
+
+
 @router.post("/devices/{device_id}/camera/preview", include_in_schema=False)
 async def preview_camera_settings(
     request: Request, device_id: str, hil_token: str = Cookie(default="")
