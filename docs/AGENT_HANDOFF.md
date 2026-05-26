@@ -70,7 +70,15 @@ Done:
       `GitDeployAdapter` materialises as env vars / `secrets.json` / `.env`
       per `params.secrets_format`; `JobWorker` purges values to `"***"` in
       DB on `finally` (no plaintext at rest).
-- [x] 95 tests pass.
+- [x] **M6** — USB identity: multi-VID/PID per device, hub-port path,
+      `device_leases` with atomic acquire (exclusive_device vs
+      exclusive_hub), passive USB-ID learn during exclusive jobs, and
+      `UsbFingerprintAdapter` for active depower/repower capture. REST:
+      `/v1/devices/{id}/usb-ids`, `/v1/devices/lookup-by-usb`,
+      `/v1/devices/{id}/learn-usb`, `/v1/leases`. HTMX list editor +
+      Learn-USB button on the devices form. See **"USB-identity wiring"**
+      section below for production hookup. 56 new tests across PR1–PR5.
+- [x] 275 tests pass.
 
 Not done:
 
@@ -299,6 +307,99 @@ again unless the user asks:
   The user reviews via the GitHub UI.
 - Don't broaden the `-m eink_large` default until the user
   explicitly says the rest of the bench is wired up.
+
+## USB-identity wiring (M6)
+
+The full M6 design lives in `docs/ARCHITECTURE.md` section 16. This is
+the operator's checklist for going from "all tests green" to "the
+Learn-USB button actually depowers a hub port and captures a real
+VID/PID."
+
+**Topology YAML — add the hub-port fields to every MCU device:**
+
+```yaml
+- id: mcu-pyportal
+  host_id: rpi-displays
+  hub_host_id: rpi-displays          # defaults to host_id; usbip server
+  hub_port_path: "1-1.1.3"            # sysfs bus-id — the real identity
+  solenoid_channel: 3                 # MCP23017 channel (0..7)
+  usb_serial: "F1DF00AE..."           # iSerial, for matching across resets
+  usb_ids:
+    - { vid: "239a", pid: "8053", role: runtime,    description: "WipperSnapper" }
+    - { vid: "239a", pid: "8054", role: runtime,    description: "CircuitPython" }
+    - { vid: "239a", pid: "0035", role: bootloader, description: "UF2" }
+```
+
+Roles are mechanism-level (`runtime | bootloader | dfu | msc | cdc |
+unknown`); product info goes in `description`. The legacy single
+`usb: {vid, pid}` block is still accepted and seeds one `unknown` row.
+
+**Migration** is automatic. On first boot after upgrade:
+- `ALTER TABLE` adds the four new device columns.
+- Any pre-existing `usb_json` is backfilled into `device_usb_ids` with
+  `source='migration'`, `role='unknown'`.
+- `device_leases` table is created, then `startup_sweep` releases any
+  active lease whose `job_id` is no longer in an active state (recovers
+  from a crashed controller without manual cleanup).
+
+**Wiring the active learn flow** (one-time, in your deployment entry
+point — e.g. `main.py` or a startup hook):
+
+```python
+from hil_controller.adapters.usb_fingerprint import UsbFingerprintAdapter
+from hil_controller.adapters.usb_scan import make_ssh_scan_fn
+
+def usb_fingerprint_provider(*, db_path: str) -> UsbFingerprintAdapter:
+    # 1. Build a transport for the hub host (your SSHTransport / similar).
+    # 2. Wrap vendor/hil-detection/usb_hub.py's SolenoidHubController in an
+    #    async facade (all_off / port_on / port_off).
+    hub = AsyncSolenoidHub(transport=hub_transport)
+    return UsbFingerprintAdapter(
+        db_path=db_path,
+        hub=hub,
+        scan_fn=lambda: ssh_scan(hub_transport),  # parses `usbip list -l`
+    )
+
+app.state.usb_fingerprint_provider = usb_fingerprint_provider
+```
+
+Without the provider, `/v1/devices/{id}/learn-usb` and the UI button
+still run end-to-end (lease acquired, DB upserted) but exercise no-op
+placeholders for the hub and the scan — useful for testing the flow
+but it captures nothing real.
+
+**Passive learn** needs no wiring: as long as the adapter the host
+registry returns for a job exposes a `transport` attribute with a
+`run(cmd)` coroutine, `Scheduler._maybe_start_passive_learn` will
+spawn the polling loop automatically. `SSHTransport` already qualifies.
+
+**Knobs:**
+- `UsbFingerprintAdapter(settle_s=2.0, reset_settle_s=1.5)` — adjust
+  for slow-enumerating boards. SAMD51 double-tap timing parameters
+  go on the `hub.port_off` call directly (see `vendor/hil-detection/
+  usb_hub.py:68` for the defaults).
+- `passive_learn_loop(interval_s=3.0)` — bump down if you want
+  faster reaction to VID/PID flips during a job, up if SSH cost is
+  noticeable.
+
+**REST endpoints summary:**
+
+```
+GET    /v1/devices/{id}/usb-ids               # list
+POST   /v1/devices/{id}/usb-ids               # manual add
+DELETE /v1/devices/{id}/usb-ids/{row_id}      # remove
+POST   /v1/devices/lookup-by-usb              # {vid,pid,iserial?} -> [devices]
+POST   /v1/devices/{id}/learn-usb             # {include_reset_cycle?}
+GET    /v1/leases?active_only=true            # observe exclusivity
+POST   /v1/leases                             # manual claim (rarely needed)
+DELETE /v1/leases/{id}                        # force-release
+```
+
+**Operator gotcha — exclusive_hub during learn is loud.** A learn-USB
+pass briefly depowers *every* port on the target hub, so any other job
+sharing that hub will see its DUT vanish. The lease primitive prevents
+two such operations colliding, but it does not pause concurrent normal
+jobs — schedule learn passes when the hub is idle, or accept the blip.
 
 ## Session lineage
 
