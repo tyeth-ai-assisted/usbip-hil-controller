@@ -1,12 +1,12 @@
 [Unit]
-Description=HIL CSI Camera Snapshot Server
+Description=HIL Camera Snapshot Server
 After=network.target
 
 [Service]
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/hil-camera-server
-ExecStart=/usr/bin/python3 /home/pi/hil-camera-server/snapshot_server.py --port 8080
+ExecStart=/usr/bin/python3 /home/pi/hil-camera-server/server.py --port 8080
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
