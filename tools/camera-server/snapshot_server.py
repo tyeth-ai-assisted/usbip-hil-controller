@@ -20,10 +20,12 @@ RPICAM_CMD = [
     "rpicam-still",
     "--nopreview",
     "--autofocus-mode", "auto",
+    "--autofocus-range", "full",
+    "--autofocus-on-capture",
     "--output", "-",
     "--encoding", "jpg",
     "--quality", "85",
-    "--timeout", "3000",
+    "--timeout", "5000",
 ]
 
 
