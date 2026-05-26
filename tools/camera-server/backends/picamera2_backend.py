@@ -35,14 +35,19 @@ class Picamera2Backend(Backend):
             raise BackendUnavailable(f"picamera2 not importable: {_IMPORT_ERROR}")
         try:
             cam = Picamera2(camera_num=self._camera_num)
-            config = cam.create_still_configuration(
+            # video_configuration keeps the ISP+AF loop running at a stable
+            # framerate, which is what continuous AF needs to converge. The
+            # still_configuration runs the pipeline only during capture and
+            # leaves AF starved.
+            config = cam.create_video_configuration(
                 main={"size": (self.cfg.width, self.cfg.height), "format": "RGB888"}
             )
             cam.configure(config)
-            cam.start()
-            # Best-effort continuous AF with full range; ignore on sensors
-            # without an AF motor (e.g. CM2, CM HQ).
-            try:
+
+            # Set AF controls before start() so they're active from frame 0.
+            # Best-effort: sensors without an AF motor (CM2, CM HQ) lack the
+            # AfMode control and would raise here.
+            if "AfMode" in cam.camera_controls:
                 cam.set_controls(
                     {
                         "AfMode": controls.AfModeEnum.Continuous,
@@ -50,8 +55,8 @@ class Picamera2Backend(Backend):
                         "AfSpeed": controls.AfSpeedEnum.Fast,
                     }
                 )
-            except Exception:
-                pass
+
+            cam.start()
             self._cam = cam
         except BackendUnavailable:
             raise
