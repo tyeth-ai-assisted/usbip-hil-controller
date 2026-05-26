@@ -80,9 +80,10 @@ class Scheduler:
         # Acquire an exclusive_device lease if the adapter resolved a device.
         # The scheduler is single-process so the in-memory semaphore is the
         # primary concurrency guard; the lease is durable + auditable + the
-        # signal used by passive USB-ID learn (PR4).
+        # signal used by passive USB-ID learn.
         lease_id: int | None = None
         assigned_device = row.get("assigned_device")
+        learn_task: asyncio.Task | None = None
         if assigned_device:
             try:
                 lease = await acquire_lease(
@@ -92,6 +93,9 @@ class Scheduler:
                     job_id=job_id,
                 )
                 lease_id = lease["id"]
+                learn_task = await self._maybe_start_passive_learn(
+                    job_id, assigned_device, adapter
+                )
             except LeaseConflict as exc:
                 log.warning("could not acquire lease for job %s: %s", job_id, exc)
 
@@ -109,6 +113,12 @@ class Scheduler:
         try:
             await worker.run()
         finally:
+            if learn_task is not None:
+                learn_task.cancel()
+                try:
+                    await learn_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             if lease_id is not None:
                 try:
                     await release_lease(self.db_path, lease_id)
@@ -116,6 +126,48 @@ class Scheduler:
                     log.warning("release_lease failed for job %s: %s", job_id, exc)
             self._active.pop(job_id, None)
             self.event_bus.cleanup(job_id)
+
+    async def _maybe_start_passive_learn(
+        self, job_id: str, device_id: str, adapter: Any
+    ) -> asyncio.Task | None:
+        """Start a background passive-learn loop if we can build a scan_fn.
+
+        Best-effort: returns None when the device has no hub_port_path or
+        we can't get a transport for the hub host. Never raises.
+        """
+        try:
+            from hil_controller.adapters.usb_scan import (
+                make_ssh_scan_fn, passive_learn_loop,
+            )
+            from hil_controller.db.connection import get_db
+
+            async with get_db(self.db_path) as db:
+                async with db.execute(
+                    "SELECT hub_host_id, hub_port_path FROM devices WHERE id=?",
+                    (device_id,),
+                ) as cur:
+                    drow = await cur.fetchone()
+            if drow is None or not drow["hub_port_path"]:
+                return None
+
+            transport = getattr(adapter, "transport", None)
+            if transport is None or not hasattr(transport, "run"):
+                return None
+
+            scan_fn = await make_ssh_scan_fn(transport, drow["hub_host_id"])
+            return asyncio.create_task(
+                passive_learn_loop(
+                    self.db_path,
+                    device_id=device_id,
+                    hub_port_path=drow["hub_port_path"],
+                    job_id=job_id,
+                    scan_fn=scan_fn,
+                ),
+                name=f"learn-{job_id}",
+            )
+        except Exception as exc:
+            log.debug("passive learn could not start for %s: %s", job_id, exc)
+            return None
 
     async def _resolve_adapter(self, job_id: str):  # noqa: ANN201
         """Return the appropriate adapter for this job.
