@@ -112,6 +112,7 @@ class GitDeployAdapter:
         display_clone += ["--branch", ref, self.source["repo"], str(self.work_dir)]
         self._deploy_stdout += f"$ {shlex.join(display_clone)}\n"
         result = await self.transport.exec(clone_cmd)
+        self._deploy_stdout += result.stdout
         self._deploy_stderr += result.stderr
         if result.exit_status != 0:
             raise RuntimeError(f"git clone failed (exit {result.exit_status}): {result.stderr}")

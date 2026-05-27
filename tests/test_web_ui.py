@@ -662,3 +662,67 @@ async def test_new_arduino_ws_page_shows_default_protomq_ref(client):
     assert "pio_env" in r.text
     assert "serial_port" in r.text
     assert "PlatformIO" in r.text
+
+
+def _build_ws(**over):
+    from hil_controller.web.router import _build_arduino_ws_job_request
+    base = dict(
+        wippersnapper_repo="https://example/ws.git", wippersnapper_ref="displays-v2",
+        protomq_repo="https://example/protomq.git", protomq_ref="displays-v2-testing",
+        pat="", submodules=True, pio_env="adafruit_feather_esp32s3_reversetft",
+        serial_port="/dev/ttyACM0", setup="", test_cmd="pytest",
+        protomq_script="", device_id="", secrets_profile="bench-protomq",
+        mqtt_host="", mqtt_port="1884", io_username="", io_key="",
+        timeout_total=1200, timeout_run=300, timeout_deploy=900,
+    )
+    base.update(over)
+    return _build_arduino_ws_job_request(**base)
+
+
+def test_ws_builder_does_not_pin_arduino_pool():
+    req = _build_ws()
+    # No hardcoded pool: matching defaults to 'public' where the MCUs live.
+    assert "pool" not in req["target"]
+
+
+def test_ws_builder_auto_selector_requests_wippersnapper_capability():
+    req = _build_ws(device_id="")
+    assert req["target"]["device"]["capabilities"] == ["wippersnapper"]
+
+
+def test_ws_builder_explicit_device_id_passthrough():
+    req = _build_ws(device_id="mcu-feather-esp32s3-revtft")
+    assert req["target"]["device"] == {"id": "mcu-feather-esp32s3-revtft"}
+
+
+def test_ws_builder_protomq_clone_recurses_submodules_when_enabled():
+    req = _build_ws(submodules=True)
+    setup = req["payload"]["source"]["setup"][2]
+    assert "git clone --depth 1 --recurse-submodules --branch displays-v2-testing" in setup
+    assert req["payload"]["source"]["submodules"] is True
+
+
+def test_ws_builder_protomq_clone_no_recurse_when_disabled():
+    req = _build_ws(submodules=False)
+    setup = req["payload"]["source"]["setup"][2]
+    assert "--recurse-submodules" not in setup
+
+
+def test_parse_github_repo_variants():
+    from hil_controller.web.router import _parse_github_repo
+    assert _parse_github_repo("https://github.com/tyeth/protomq.git") == ("tyeth", "protomq")
+    assert _parse_github_repo("https://github.com/tyeth/protomq") == ("tyeth", "protomq")
+    assert _parse_github_repo("git@github.com:tyeth/protomq.git") == ("tyeth", "protomq")
+    assert _parse_github_repo("https://gitlab.com/x/y.git") is None
+    assert _parse_github_repo("") is None
+
+
+@pytest.mark.asyncio
+async def test_ws_scripts_refresh_rejects_non_github(client):
+    r = await client.get(
+        "/ui/jobs/arduino-ws/scripts",
+        params={"protomq_repo": "https://gitlab.com/x/y.git", "protomq_ref": "main"},
+        cookies=COOKIE,
+    )
+    assert r.status_code == 200
+    assert "only github.com repos" in r.text

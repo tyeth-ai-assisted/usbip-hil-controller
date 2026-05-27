@@ -1668,6 +1668,69 @@ async def new_arduino_ws_job_page(
     })
 
 
+def _parse_github_repo(url: str) -> tuple[str, str] | None:
+    """Return (owner, repo) for a github.com URL, else None."""
+    import re
+    m = re.match(
+        r"^(?:https?://)?(?:[\w.-]+@)?(?:www\.)?github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?/?$",
+        url.strip(),
+    )
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
+@router.get("/jobs/arduino-ws/scripts", response_class=HTMLResponse, include_in_schema=False)
+async def arduino_ws_scripts_refresh(
+    request: Request,
+    hil_token: str = Cookie(default=""),
+    protomq_repo: str = "",
+    protomq_ref: str = "",
+    pat: str = "",
+) -> HTMLResponse:
+    """Return <option> tags for protoMQ scripts/ at the given repo+ref.
+
+    Uses the GitHub contents API (no clone). HTMX swaps these into the
+    #protomq_script <select>.
+    """
+    if not (await _check_web_token(request, hil_token)):
+        return HTMLResponse("", status_code=401)
+
+    parsed = _parse_github_repo(protomq_repo)
+    if parsed is None:
+        return HTMLResponse(
+            '<option value="">(only github.com repos supported for refresh)</option>'
+        )
+    owner, repo = parsed
+    ref = protomq_ref.strip() or _ARDUINO_WS_DEFAULTS["protomq_ref"]
+    api = f"https://api.github.com/repos/{owner}/{repo}/contents/scripts"
+
+    headers = {"Accept": "application/vnd.github+json"}
+    if pat.strip():
+        headers["Authorization"] = f"Bearer {pat.strip()}"
+    from httpx import AsyncClient
+    try:
+        async with AsyncClient(timeout=10.0) as c:
+            r = await c.get(api, params={"ref": ref}, headers=headers)
+        if r.status_code != 200:
+            return HTMLResponse(
+                f'<option value="">(github API {r.status_code} for {html.escape(owner)}/'
+                f'{html.escape(repo)}@{html.escape(ref)})</option>'
+            )
+        entries = r.json()
+    except Exception as exc:
+        return HTMLResponse(f'<option value="">(refresh failed: {html.escape(str(exc))})</option>')
+
+    stems = sorted(
+        e["name"][:-5]
+        for e in entries
+        if isinstance(e, dict) and e.get("type") == "file" and e.get("name", "").endswith(".json")
+    )
+    opts = ['<option value="">None / not needed</option>']
+    opts += [f'<option value="{html.escape(s)}">{html.escape(s)}</option>' for s in stems]
+    return HTMLResponse("\n".join(opts))
+
+
 @router.post("/jobs/arduino-ws", include_in_schema=False, response_model=None)
 async def submit_arduino_ws_job(
     request: Request,
@@ -1703,9 +1766,9 @@ async def submit_arduino_ws_job(
     if not protomq_repo:
         protomq_repo = cfg.protomq_repo
     if not protomq_ref:
-        protomq_ref = cfg.protomq_default_ref
+        protomq_ref = _ARDUINO_WS_DEFAULTS["protomq_ref"]
     if not wippersnapper_ref:
-        wippersnapper_ref = "main"
+        wippersnapper_ref = _ARDUINO_WS_DEFAULTS["wippersnapper_ref"]
     if not pio_env:
         pio_env = cfg.pio_default_env
     if not serial_port:
@@ -2020,6 +2083,8 @@ async def purge_eligible(
 
 
 _ARDUINO_WS_DEFAULTS = {
+    "wippersnapper_ref": "displays-v2",
+    "protomq_ref": "displays-v2-testing",
     "setup": "pip install -e . && pip install -e protomq/",
     "test_cmd": "python -m pytest tests/ -v --tb=short",
 }
@@ -2051,8 +2116,10 @@ def _build_arduino_ws_job_request(
     import shlex as _shlex
 
     proto_clone = (
-        f"git clone --depth 1 --branch {_shlex.quote(protomq_ref)} "
-        f"{_shlex.quote(protomq_repo)} protomq"
+        "git clone --depth 1"
+        + (" --recurse-submodules" if submodules else "")
+        + f" --branch {_shlex.quote(protomq_ref)} "
+        + f"{_shlex.quote(protomq_repo)} protomq"
     )
     pio_steps = (
         f"pip install platformio && "
@@ -2087,11 +2154,11 @@ def _build_arduino_ws_job_request(
             "script": protomq_script,
         }
 
-    target: dict = {"pool": "wippersnapper-arduino"}
+    target: dict = {}
     if device_id:
         target["device"] = {"id": device_id}
     else:
-        target["device"] = {"kind": "microcontroller", "capabilities": ["arduino-snapper"]}
+        target["device"] = {"kind": "microcontroller", "capabilities": ["wippersnapper"]}
 
     secrets: dict = {"MQTT_HOST": mqtt_host, "MQTT_PORT": str(_mqtt_port)}
     if io_username:

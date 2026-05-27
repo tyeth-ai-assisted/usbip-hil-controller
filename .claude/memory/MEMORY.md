@@ -8,3 +8,4 @@
 - [SSH via Windows OpenSSH](feedback_ssh_openssh.md) — use /c/Windows/System32/OpenSSH/ssh.exe, not Git Bash ssh
 - [Commit and push always](../../../.claude/projects/C--dev-python-cpython-usbip-hil-controller/memory/feedback_commit_and_push.md) — always commit and push after completing work, don't ask
 - [PK design](feedback_pk_design.md) — surrogate integer PKs + UNIQUE; never composite PKs of attribute columns (esp. not iSerial)
+- [Bench repo & deploy](reference_bench_host.md) — repo path, controller.env, topology.yaml gitignored, deploy via git pull + restart

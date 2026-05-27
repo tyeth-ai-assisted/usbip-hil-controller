@@ -41,29 +41,57 @@ class HostRegistry:
         log.info("Loaded %d hosts, %d devices from %s", len(self._hosts), len(self._devices), path)
 
     def find_device_for_job(self, request: dict[str, Any]) -> tuple[dict, dict] | None:
-        """Return (host, device) for the given job request, or None if no seat."""
+        """Return (host, device) for the given job request, or None if no seat.
+
+        An explicit ``device.id`` selector is authoritative: it matches that
+        device by id alone (still requiring it to be available and owned by a
+        known host), bypassing the pool/kind/model/capability gates. Operators
+        who pick a specific device in the UI get that device regardless of which
+        pool a job-builder happens to pin.
+        """
         target = request.get("target", {})
         device_sel = target.get("device", {})
         pool = target.get("pool", "public")
+        want_id = device_sel.get("id")
+        want_caps = set(device_sel.get("capabilities") or [])
 
         for device in self._devices:
             if device.get("status", "available") != "available":
                 continue
+            host = next((h for h in self._hosts if h["id"] == device["host_id"]), None)
+            if host is None:
+                continue
+
+            if want_id:
+                if device["id"] == want_id:
+                    return host, device
+                continue
+
             if pool and device.get("pool") != pool:
                 continue
             if device_sel.get("kind") and device["kind"] != device_sel["kind"]:
                 continue
             if device_sel.get("model") and device["model"] != device_sel["model"]:
                 continue
-            if device_sel.get("id") and device["id"] != device_sel["id"]:
-                continue
-            # Find owning host
-            host = next((h for h in self._hosts if h["id"] == device["host_id"]), None)
-            if host is None:
+            if want_caps and not want_caps.issubset(set(device.get("capabilities") or [])):
                 continue
             return host, device
 
         return None
+
+    def _no_match_reason(self, request: dict[str, Any]) -> str:
+        target = request.get("target", {})
+        device_sel = target.get("device", {})
+        candidates = ", ".join(
+            f"{d['id']}(pool={d.get('pool')},kind={d.get('kind')},status={d.get('status', 'available')})"
+            for d in self._devices
+        ) or "<none>"
+        return (
+            "No available device matched job target "
+            f"(pool={target.get('pool', 'public')!r}, id={device_sel.get('id')!r}, "
+            f"kind={device_sel.get('kind')!r}, capabilities={device_sel.get('capabilities') or []}). "
+            f"Candidates: {candidates}"
+        )
 
     async def get_adapter(self, job_id: str) -> Any:
         from hil_controller.db.connection import get_db, update_job_state
@@ -101,10 +129,9 @@ class RealHostRegistry(HostRegistry):
         request = json.loads(row["request_json"])
         result = self.find_device_for_job(request)
         if result is None:
-            log.warning("No matching device for job %s — using fake adapter", job_id)
-            from hil_controller.queue.scheduler import _FakeAdapter
-
-            return _FakeAdapter()
+            reason = self._no_match_reason(request)
+            log.warning("No matching device for job %s: %s", job_id, reason)
+            return _UnmatchedAdapter(reason)
 
         host, device = result
 
@@ -152,3 +179,31 @@ class RealHostRegistry(HostRegistry):
             secrets=secrets,
             secrets_format=secrets_format,
         )
+
+
+class _UnmatchedAdapter:
+    """Adapter returned when no device matches a job.
+
+    Raising in ``acquire()`` routes through the worker's error path, which
+    emits ``state=error`` plus a ``log`` event carrying the reason — so the
+    failure is visible in the job log instead of silently passing on a fake
+    adapter.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    async def acquire(self) -> None:
+        raise RuntimeError(self.reason)
+
+    async def reset(self) -> None:
+        pass
+
+    async def flash(self, artifact: dict) -> None:
+        pass
+
+    async def open_serial(self):
+        return iter([])
+
+    async def release(self) -> None:
+        pass

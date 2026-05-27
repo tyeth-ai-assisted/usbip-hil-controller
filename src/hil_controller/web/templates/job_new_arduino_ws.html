@@ -29,8 +29,8 @@
       <div class="form-group">
         <label for="ws_ref">Branch / Ref *</label>
         <input type="text" id="ws_ref" name="wippersnapper_ref"
-          value="{{ form.wippersnapper_ref if form else 'main' }}"
-          required placeholder="main">
+          value="{{ form.wippersnapper_ref if form else defaults.wippersnapper_ref }}"
+          required placeholder="{{ defaults.wippersnapper_ref }}">
       </div>
       <div class="form-group">
         <label for="pat">PAT (clone token)</label>
@@ -41,7 +41,7 @@
       <div class="form-group" style="align-self:end;">
         <label>
           <input type="checkbox" name="submodules" value="1"
-            {% if form and form.submodules %}checked{% endif %}> Recurse WipperSnapper submodules
+            {% if (form and form.submodules) or not form %}checked{% endif %}> Recurse WipperSnapper submodules
         </label>
       </div>
     </div>
@@ -65,8 +65,8 @@
       <div class="form-group">
         <label for="proto_ref">protoMQ Branch / Ref</label>
         <input type="text" id="proto_ref" name="protomq_ref"
-          value="{{ form.protomq_ref if form else cfg.protomq_default_ref }}"
-          placeholder="{{ cfg.protomq_default_ref }}">
+          value="{{ form.protomq_ref if form else defaults.protomq_ref }}"
+          placeholder="{{ defaults.protomq_ref }}">
       </div>
       <div class="form-group">
         <label for="protomq_script">Play-Script (protoMQ /scripts)</label>
@@ -79,7 +79,13 @@
           </option>
           {% endfor %}
         </select>
-        <span class="form-hint">Drives the display/device during the test run via MQTT</span>
+        <button type="button" class="btn btn-sm btn-outline" style="margin-top:0.4rem;"
+          hx-get="/ui/jobs/arduino-ws/scripts"
+          hx-include="[name='protomq_repo'],[name='protomq_ref'],[name='pat']"
+          hx-target="#protomq_script" hx-swap="innerHTML">
+          Load scripts from repo+ref
+        </button>
+        <span class="form-hint">Fetches <code>scripts/*.json</code> from the protoMQ repo at the given ref (GitHub API, no clone). Drives the display/device during the test run via MQTT.</span>
       </div>
     </div>
   </div>

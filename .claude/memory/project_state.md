@@ -100,6 +100,14 @@ Devices form: camera_id + qr_identifier fields + live camera panel with snapshot
   VID/PIDs; optional reset cycle splits bootloader vs runtime.
 - 56 new tests across PR1–PR5; **275 total pass**.
 
+**Job matching fix (2026-05-27):** Arduino-WS jobs silently "passed" doing nothing
+because the builder pinned `pool: wippersnapper-arduino` but all MCU devices are in
+`pool: public`, so `find_device_for_job` fell back to `_FakeAdapter` (no deploy/run).
+Now: explicit `device.id` selection bypasses pool/kind/cap gates; capability subset
+matching implemented; builder no longer pins a pool and auto-selector requests
+`["wippersnapper"]`; no-match returns `_UnmatchedAdapter` whose `acquire()` raises so
+the worker emits `state=error` + a diagnostic log instead of a silent pass.
+
 **Not yet done:**
 - M2 remainder: GitHub OIDC verifier, policy file
 - M2.5: secret profiles YAML, per-job secrets materialisation, artifact sanitisation
