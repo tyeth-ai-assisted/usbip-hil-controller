@@ -448,6 +448,28 @@ not 127.0.0.1.
 - `scripts/setup-hil-host.sh` provisions passwordless-sudo usbip +
   vhci-hcd/usbip-host modules + usbipd.
 
+**⚠ usbipd MUST be running on the USB-server host (the one physically
+holding the DUT, e.g. rpi-displays).** It is the daemon the controller's
+`usbip attach` connects to on TCP **:3240**. If it is down, the flash phase
+fails with `usbip attach failed (exit 1): usbip: error: tcp connect` — the
+build can succeed and you still never reach the DUT. Diagnose + start:
+
+```
+# on the USB-server host (rpi-displays):
+ss -ltn | grep 3240                 # is it listening?
+pgrep -a usbipd                     # is the daemon up?
+sudo usbipd -D                      # manual one-shot start (does NOT persist)
+sudo usbip list -l | grep 1-1.1.1.4 # the revtft Feather busid 239a:8123
+```
+
+`sudo usbipd -D` is ephemeral — it dies on reboot. For persistence,
+`setup-hil-host.sh` enables a packaged `usbipd.service` when present, else
+installs a `hil-usbipd.service` unit (Debian/RPi ship the `usbipd` binary but
+no unit). rpi-displays currently runs usbipd **manually started** (no unit yet
+— rerun `setup-hil-host.sh` there to make it boot-persistent). The controller
+(client) side needs only `vhci_hcd` loaded; the bridge `modprobe`s it at flash
+time. busid for the revtft Feather = `1-1.1.1.4`.
+
 **⚠ Model A re-enumeration risk — VALIDATE ON HARDWARE BEFORE TRUSTING.**
 The ESP32-S3 re-enumerates (ROM↔app) during flash, which can drop the
 one-shot usbip attachment mid-upload. `UsbipBridge.attached()` does **not**

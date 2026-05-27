@@ -122,13 +122,38 @@ modprobe usbip-host 2>/dev/null && echo "  usbip-host loaded (usbip server)" || 
 echo -e "vhci-hcd\nusbip-host" > /etc/modules-load.d/hil-usbip.conf
 echo "  persisted usbip modules in /etc/modules-load.d/hil-usbip.conf"
 
-# Start usbipd on USB-server hosts if the unit is available.
+# Start usbipd on USB-server hosts. usbipd MUST be running (listening on
+# :3240) on the host that physically holds the DUT, or the controller's
+# `usbip attach` fails with "usbip: error: tcp connect". Prefer a packaged
+# usbipd.service; otherwise install our own unit so it survives reboots —
+# Debian/RPi's `usbip` package ships the binary but no service unit, so the
+# manual `sudo usbipd -D` you'd otherwise need does not persist.
+USBIPD_BIN="$(command -v usbipd || echo /usr/sbin/usbipd)"
 if systemctl list-unit-files 2>/dev/null | grep -q '^usbipd\.service'; then
     systemctl enable --now usbipd 2>/dev/null \
         && echo "  usbipd.service enabled+started" \
         || echo "  WARNING: could not enable usbipd.service" >&2
+elif [ -x "$USBIPD_BIN" ]; then
+    cat > /etc/systemd/system/hil-usbipd.service <<EOF
+# Managed by setup-hil-host.sh — usbip host daemon for HIL per-phase flashing.
+# Needed only on USB-server hosts (those physically holding DUTs).
+[Unit]
+Description=usbip host daemon (HIL per-phase flashing)
+After=network.target
+
+[Service]
+ExecStart=$USBIPD_BIN
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now hil-usbipd 2>/dev/null \
+        && echo "  hil-usbipd.service installed+started (listens :3240)" \
+        || echo "  WARNING: could not enable hil-usbipd.service" >&2
 else
-    echo "  usbipd.service not found (install 'usbip'/'linux-tools' on USB-server hosts)"
+    echo "  usbipd not found (install 'usbip'/'linux-tools' on USB-server hosts)"
 fi
 
 # NOTE: keep the blanket vendor/usbip-autoattach autobind rule OFF — per-phase
