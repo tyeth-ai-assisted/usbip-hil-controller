@@ -94,6 +94,46 @@ fi
 chmod 600 "$AUTH_KEYS"
 chown "$HIL_USER:$HIL_USER" "$AUTH_KEYS"
 
+# usbip — passwordless sudo + kernel modules for per-phase flashing.
+# arduino-ws jobs with flash_mode=usbip have the controller (client) attach a
+# DUT's USB port that physically lives on a server host, then flash it. Both
+# sides call usbip via sudo without a TTY, so a no-prompt sudoers drop-in is
+# required. We provision both roles (harmless if a host only acts as one):
+#   server (USB-host, e.g. rpi-displays): usbipd + `usbip bind/unbind`
+#   client (controller, e.g. tachyon):    vhci-hcd + `usbip attach/detach/port`
+USBIP_BIN="$(command -v usbip || echo /usr/sbin/usbip)"
+SUDOERS_USBIP=/etc/sudoers.d/hil-usbip
+MODPROBE_BIN="$(command -v modprobe || echo /usr/sbin/modprobe)"
+cat > "$SUDOERS_USBIP" <<EOF
+# Managed by setup-hil-host.sh — passwordless usbip for HIL per-phase flashing.
+$HIL_USER ALL=(root) NOPASSWD: $USBIP_BIN, $MODPROBE_BIN vhci-hcd, $MODPROBE_BIN usbip-host
+EOF
+chmod 440 "$SUDOERS_USBIP"
+if visudo -cf "$SUDOERS_USBIP" >/dev/null 2>&1; then
+    echo "  usbip sudoers drop-in written to $SUDOERS_USBIP"
+else
+    echo "  WARNING: $SUDOERS_USBIP failed visudo check — removing" >&2
+    rm -f "$SUDOERS_USBIP"
+fi
+
+# Load the usbip kernel modules now and persist them across reboots.
+modprobe vhci-hcd 2>/dev/null && echo "  vhci-hcd loaded (usbip client)" || true
+modprobe usbip-host 2>/dev/null && echo "  usbip-host loaded (usbip server)" || true
+echo -e "vhci-hcd\nusbip-host" > /etc/modules-load.d/hil-usbip.conf
+echo "  persisted usbip modules in /etc/modules-load.d/hil-usbip.conf"
+
+# Start usbipd on USB-server hosts if the unit is available.
+if systemctl list-unit-files 2>/dev/null | grep -q '^usbipd\.service'; then
+    systemctl enable --now usbipd 2>/dev/null \
+        && echo "  usbipd.service enabled+started" \
+        || echo "  WARNING: could not enable usbipd.service" >&2
+else
+    echo "  usbipd.service not found (install 'usbip'/'linux-tools' on USB-server hosts)"
+fi
+
+# NOTE: keep the blanket vendor/usbip-autoattach autobind rule OFF — per-phase
+# flashing binds only the single leased busid, on demand.
+
 echo ""
 echo "Done. Current groups for $HIL_USER:"
 id "$HIL_USER"

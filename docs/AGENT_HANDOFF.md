@@ -401,6 +401,68 @@ sharing that hub will see its DUT vanish. The lease primitive prevents
 two such operations colliding, but it does not pause concurrent normal
 jobs — schedule learn passes when the hub is idle, or accept the blip.
 
+## Per-phase execution-location for arduino-ws jobs (M7)
+
+WipperSnapper arduino-ws jobs used to run **every phase on the DUT's
+host**. rpi-displays (the DUT host) has only 415 MB RAM and a 208 MB
+tmpfs `/tmp`, so a PlatformIO build there OOM-thrashes / runs out of
+disk. The controller (Tachyon, 192.168.1.169) builds easily. So each
+phase's **execution host** is now selectable.
+
+**Carrier:** `params.exec` (pass-through dict, mirrors `params.protomq`):
+
+```
+params.exec = {
+  "build_host":   "controller" | "dut-host",          # where `pio run` compiles
+  "flash_mode":   "usbip" | "ship-artifacts",          # how firmware reaches the DUT
+  "test_host":    "controller" | "dut-host" | "none",
+  "protomq_host": "controller" | "dut-host" | "off",
+  "pio_env":      "<platformio env>",
+}
+```
+
+Near-term defaults (set by the arduino-ws form builder): build +
+protomq on the controller, `flash_mode=usbip`, pytest none. Under this
+layout the DUT's `MQTT_HOST` = the controller LAN IP
+(`config.controller_ip` / `HIL_CONTROLLER_IP`, default 192.168.1.169),
+not 127.0.0.1.
+
+**Code map:**
+- `adapters/usbip_bridge.py` — `UsbipBridge` brokers a device from its
+  USB-server host onto a client. `attached()` async CM does ensure-vhci →
+  bind (server) → attach (client) → yield the new `/dev/tty*` → detach +
+  unbind in a `finally`. Pure parsers `parse_usbip_port` /
+  `diff_serial_ports` are unit-tested.
+- `adapters/arduino_ws_exec.py` — `ArduinoWsExecAdapter` holds two
+  transports (controller + DUT-host), delegates clone/build/run to an
+  inner `GitDeployAdapter` on the build host, and adds **flash** as a
+  distinct phase (usbip upload on the controller, or ship-artifacts +
+  esptool on the DUT). usbip flash is wrapped in an `exclusive_device`
+  lease released in a `finally`. Cross-host build+run → `NotImplementedError`.
+- `hosts/registry.py` `make_adapter` (DB-free, unit-tested) routes jobs
+  with `params.exec` to the new adapter, building the DUT transport from
+  the device's `hub_host_id`.
+- Topology: device `host_id` = execution host (the controller), separate
+  from `hub_host_id` + `hub_port_path` (where USB physically lives). See
+  `mcu-feather-esp32s3-revtft` in `deploy/topology.example.yaml`.
+- `scripts/setup-hil-host.sh` provisions passwordless-sudo usbip +
+  vhci-hcd/usbip-host modules + usbipd.
+
+**⚠ Model A re-enumeration risk — VALIDATE ON HARDWARE BEFORE TRUSTING.**
+The ESP32-S3 re-enumerates (ROM↔app) during flash, which can drop the
+one-shot usbip attachment mid-upload. `UsbipBridge.attached()` does **not**
+yet run the `vendor/usbip-autoattach` reconciliation loop that handles
+re-enum. So before relying on `flash_mode=usbip` for the revtft Feather,
+run the **cheap validation** (no long build): on rpi-displays
+`sudo usbip bind -b 1-1.1.1.4`; on the controller `sudo modprobe vhci-hcd`
++ `sudo usbip attach -r 192.168.1.234 -b 1-1.1.1.4`; then
+`esptool chip-id` and a second reset-crossing call (`esptool read-mac`)
+to exercise two re-enum cycles. If the attachment survives, usbip is
+viable; **if it flakes, switch the job to `flash_mode=ship-artifacts`**
+(already implemented) rather than grinding on usbip. These are privileged
+commands on production hosts — run them deliberately, not from an agent
+session.
+
 ## Session lineage
 
 This handoff covers the work done in session
