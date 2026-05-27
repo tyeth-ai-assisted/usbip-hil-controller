@@ -55,9 +55,17 @@ class SSHTransport:
         if cwd:
             cmd = f"cd {_shell_quote(cwd)} && {cmd}"
 
+        # asyncssh runs channels in str/UTF-8 mode: input must be str (bytes
+        # raise "utf_8_encode() argument 1 must be str, not bytes"), and output
+        # is decoded strictly unless errors="replace" is set. Our stdin is always
+        # text we encoded ourselves, so decoding back is lossless.
+        ssh_input = stdin.decode("utf-8") if isinstance(stdin, (bytes, bytearray)) else stdin
+
         kw = self._connect_kwargs()
         async with asyncssh.connect(**kw) as conn:
-            result = await conn.run(cmd, env=env, input=stdin)
+            result = await conn.run(
+                cmd, env=env, input=ssh_input, encoding="utf-8", errors="replace"
+            )
 
         return ExecResult(
             exit_status=result.exit_status or 0,
@@ -72,7 +80,7 @@ class SSHTransport:
         kw = self._connect_kwargs()
 
         async with asyncssh.connect(**kw) as conn:
-            async with conn.create_process(cmd) as proc:
+            async with conn.create_process(cmd, encoding="utf-8", errors="replace") as proc:
                 async for line in proc.stdout:
                     yield line.encode() if isinstance(line, str) else line
 
