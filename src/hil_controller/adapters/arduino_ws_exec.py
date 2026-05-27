@@ -34,7 +34,6 @@ from typing import Any
 
 from hil_controller.adapters.git_deploy import GitDeployAdapter
 from hil_controller.adapters.usbip_bridge import UsbipBridge
-from hil_controller.queue import leases
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +58,6 @@ class ArduinoWsExecAdapter:
         exec_plan: dict[str, Any],
         device: dict[str, Any],
         server_addr: str,
-        db_path: str | None = None,
         secrets: dict[str, str] | None = None,
         secrets_format: str = "dotenv",
         work_dir: PurePosixPath | None = None,
@@ -72,7 +70,6 @@ class ArduinoWsExecAdapter:
         self.exec_plan = exec_plan
         self.device = device
         self.server_addr = server_addr
-        self.db_path = db_path
         self.work_dir = work_dir or PurePosixPath(f"/tmp/hil/{job_id}")
         self._pio_env = exec_plan.get("pio_env", "")
         self._settle_s = 2.0
@@ -174,46 +171,39 @@ class ArduinoWsExecAdapter:
             await self._flash_usbip()
 
     async def _flash_usbip(self) -> None:
+        # The job's exclusive_device lease is held by the scheduler for the
+        # whole job lifetime (queue/scheduler.py), covering deploy+flash+run.
+        # This phase must NOT take a second lease — that conflicts with the
+        # job's own lease and self-deadlocks the flash. The usbip bridge
+        # context manager handles its own bind/attach/detach/unbind teardown.
         busid = self.device["hub_port_path"]
-        lease = None
-        if self.db_path:
-            lease = await leases.acquire(
-                self.db_path,
-                kind="exclusive_device",
-                device_id=self.device["id"],
-                job_id=self.job_id,
-            )
-        try:
-            bridge = UsbipBridge(
-                server_tp=self.dut_transport,
-                client_tp=self.controller_transport,
-                server_addr=self.server_addr,
-                busid=busid,
-                settle_s=self._settle_s,
-            )
-            async with bridge.attached() as port:
-                if not port:
-                    raise RuntimeError(
-                        f"usbip: no serial port appeared on the controller after "
-                        f"attaching busid {busid} from {self.server_addr}"
-                    )
-                self._deploy_stdout += f"\n$ usbip-attached {busid} → {port}\n"
-                upload = [
-                    "bash",
-                    "-c",
-                    f". .venv/bin/activate && pio run -e {self._pio_env} "
-                    f"--target upload --upload-port {port}",
-                ]
-                res = await self.controller_transport.exec(upload, cwd=str(self.work_dir))
-                self._deploy_stdout += res.stdout
-                self._deploy_stderr += res.stderr
-                if res.exit_status != 0:
-                    raise RuntimeError(
-                        f"flash (pio upload) failed (exit {res.exit_status}): {res.stderr}"
-                    )
-        finally:
-            if lease is not None:
-                await leases.release(self.db_path, lease["id"])
+        bridge = UsbipBridge(
+            server_tp=self.dut_transport,
+            client_tp=self.controller_transport,
+            server_addr=self.server_addr,
+            busid=busid,
+            settle_s=self._settle_s,
+        )
+        async with bridge.attached() as port:
+            if not port:
+                raise RuntimeError(
+                    f"usbip: no serial port appeared on the controller after "
+                    f"attaching busid {busid} from {self.server_addr}"
+                )
+            self._deploy_stdout += f"\n$ usbip-attached {busid} → {port}\n"
+            upload = [
+                "bash",
+                "-c",
+                f". .venv/bin/activate && pio run -e {self._pio_env} "
+                f"--target upload --upload-port {port}",
+            ]
+            res = await self.controller_transport.exec(upload, cwd=str(self.work_dir))
+            self._deploy_stdout += res.stdout
+            self._deploy_stderr += res.stderr
+            if res.exit_status != 0:
+                raise RuntimeError(
+                    f"flash (pio upload) failed (exit {res.exit_status}): {res.stderr}"
+                )
 
     async def _flash_ship_artifacts(self) -> None:
         build_dir = self.work_dir / ".pio" / "build" / self._pio_env

@@ -6,7 +6,7 @@ tears the bridge down in a finally. All via fake transports — no hardware.
 """
 
 from pathlib import PurePosixPath
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -34,7 +34,7 @@ def _argvs(t):
     return [c.args[0] for c in t.exec.call_args_list]
 
 
-def _make(*, controller, dut, flash_mode="usbip", build_host="controller", db_path="db"):
+def _make(*, controller, dut, flash_mode="usbip", build_host="controller"):
     return ArduinoWsExecAdapter(
         controller_transport=controller,
         dut_transport=dut,
@@ -54,17 +54,8 @@ def _make(*, controller, dut, flash_mode="usbip", build_host="controller", db_pa
         },
         device={"id": "mcu-revtft", "hub_port_path": "1-1.1.1.4"},
         server_addr="192.168.1.234",
-        db_path=db_path,
         work_dir=PurePosixPath("/tmp/hil/job-1"),
     )
-
-
-@pytest.fixture
-def fake_leases():
-    with patch("hil_controller.adapters.arduino_ws_exec.leases") as m:
-        m.acquire = AsyncMock(return_value={"id": 42})
-        m.release = AsyncMock(return_value=True)
-        yield m
 
 
 async def _controller_with_usbip(controller):
@@ -86,7 +77,7 @@ async def _controller_with_usbip(controller):
 
 
 @pytest.mark.asyncio
-async def test_build_runs_clone_and_setup_on_controller(fake_leases):
+async def test_build_runs_clone_and_setup_on_controller():
     controller, dut = _transport(), _transport()
     await _controller_with_usbip(controller)
     adapter = _make(controller=controller, dut=dut)
@@ -99,7 +90,7 @@ async def test_build_runs_clone_and_setup_on_controller(fake_leases):
 
 
 @pytest.mark.asyncio
-async def test_usbip_flash_binds_on_dut_attaches_uploads_on_controller(fake_leases):
+async def test_usbip_flash_binds_on_dut_attaches_uploads_on_controller():
     controller, dut = _transport(), _transport()
 
     async def controller_exec(argv, **kw):
@@ -123,17 +114,21 @@ async def test_usbip_flash_binds_on_dut_attaches_uploads_on_controller(fake_leas
         a[0] == "bash" and "--target upload" in a[-1] and "/dev/ttyACM0" in a[-1]
         for a in c_cmds
     )
-    fake_leases.acquire.assert_awaited_once()
-    fake_leases.release.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_usbip_flash_releases_lease_even_on_failure(fake_leases):
+async def test_usbip_flash_tears_down_bridge_even_on_failure():
+    """No lease here — the scheduler owns the job's exclusive_device lease.
+
+    The adapter only owns the usbip bridge, so the failure-path guarantee it
+    must keep is that the busid is unbound (and detach attempted) even when the
+    flash fails, so the next job can still claim the device.
+    """
     controller, dut = _transport(), _transport()
 
     async def controller_exec(argv, **kw):
         if argv[0] == "bash" and "ttyACM" in argv[-1]:
-            return _result(0, stdout="")  # no port ever appears
+            return _result(0, stdout="")  # no port ever appears -> flash fails
         if argv[:3] == ["sudo", "usbip", "port"]:
             return _result(0, stdout="")
         return _result(0)
@@ -143,11 +138,12 @@ async def test_usbip_flash_releases_lease_even_on_failure(fake_leases):
     adapter._settle_s = 0
     with pytest.raises(RuntimeError):
         await adapter.deploy()
-    fake_leases.release.assert_awaited_once_with("db", 42)
+    # bridge teardown ran on the DUT host (server) despite the flash failing
+    assert ["sudo", "usbip", "unbind", "-b", "1-1.1.1.4"] in _argvs(dut)
 
 
 @pytest.mark.asyncio
-async def test_ship_artifacts_copies_build_then_esptools_on_dut(fake_leases):
+async def test_ship_artifacts_copies_build_then_esptools_on_dut():
     controller, dut = _transport(), _transport()
     adapter = _make(controller=controller, dut=dut, flash_mode="ship-artifacts")
     await adapter.deploy()
@@ -156,12 +152,10 @@ async def test_ship_artifacts_copies_build_then_esptools_on_dut(fake_leases):
     dut.copy_to.assert_awaited()
     # esptool ran on the DUT host
     assert any("esptool" in a[-1] for a in _argvs(dut) if a and a[0] == "bash")
-    # ship-artifacts does not take a usbip lease
-    fake_leases.acquire.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_run_executes_on_controller_for_protomq_host(fake_leases):
+async def test_run_executes_on_controller_for_protomq_host():
     controller, dut = _transport(), _transport()
     controller.exec.return_value = _result(0, stdout="ok")
     adapter = _make(controller=controller, dut=dut)
@@ -173,7 +167,7 @@ async def test_run_executes_on_controller_for_protomq_host(fake_leases):
 
 
 @pytest.mark.asyncio
-async def test_cross_host_build_run_is_rejected_clearly(fake_leases):
+async def test_cross_host_build_run_is_rejected_clearly():
     controller, dut = _transport(), _transport()
     adapter = ArduinoWsExecAdapter(
         controller_transport=controller,
@@ -190,7 +184,6 @@ async def test_cross_host_build_run_is_rejected_clearly(fake_leases):
         },
         device={"id": "d", "hub_port_path": "1-1"},
         server_addr="1.2.3.4",
-        db_path="db",
     )
     with pytest.raises(NotImplementedError):
         await adapter.deploy()

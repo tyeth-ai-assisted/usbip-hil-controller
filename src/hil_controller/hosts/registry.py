@@ -216,7 +216,6 @@ class RealHostRegistry(HostRegistry):
                 exec_plan=exec_plan,
                 device=device,
                 server_addr=dut_host.get("addr", ""),
-                db_path=getattr(self, "db_path", None),
                 secrets=secrets,
                 secrets_format=secrets_format,
             )
