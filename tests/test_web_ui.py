@@ -77,6 +77,53 @@ async def test_dashboard_renders(client):
 
 
 # ---------------------------------------------------------------------------
+# Asset view route + job-detail assets link
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_view_log_asset_serves_text(client, app, tmp_path):
+    import uuid
+    from datetime import datetime, timezone
+
+    from hil_controller.db.connection import get_db, insert_job
+
+    db_path = app.state.db_path
+    job_id = "asset-job-1"
+    log_file = tmp_path / "deploy.log"
+    log_file.write_text("toolchain error: Dynconfig not exist\n")
+    aid = str(uuid.uuid4())
+    async with get_db(db_path) as db:
+        await insert_job(
+            db, job_id=job_id, request_json={"params": {}, "payload": {"kind": "git-source"}},
+            secrets_profile="p", exclusive_host=False,
+        )
+        await db.execute(
+            "INSERT INTO assets (id, filename, path, size_bytes, kind, job_id, created_at) "
+            "VALUES (?, 'deploy.log', ?, 10, 'log', ?, ?)",
+            (aid, str(log_file), job_id, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+    # view route serves the file as text
+    r = await client.get(f"/ui/assets/{aid}/view", cookies=COOKIE)
+    assert r.status_code == 200
+    assert "Dynconfig" in r.text
+
+    # job detail page links the asset
+    r = await client.get(f"/ui/jobs/{job_id}", cookies=COOKIE)
+    assert r.status_code == 200
+    assert f"/ui/assets/{aid}/view" in r.text
+    assert "deploy.log" in r.text
+
+
+@pytest.mark.asyncio
+async def test_view_asset_requires_auth(client):
+    r = await client.get("/ui/assets/nope/view", follow_redirects=False)
+    assert r.status_code in (303, 307)
+
+
+# ---------------------------------------------------------------------------
 # Hosts CRUD
 # ---------------------------------------------------------------------------
 

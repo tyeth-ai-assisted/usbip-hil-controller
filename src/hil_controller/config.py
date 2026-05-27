@@ -56,3 +56,16 @@ def get_settings() -> Settings:
     if _settings is None:
         _settings = Settings()
     return _settings
+
+
+def resolve_jobs_dir() -> str:
+    """Local directory for job assets (uploaded firmware, captured logs).
+
+    ``HIL_JOBS_DIR`` when set, else a ``jobs/`` subdirectory next to the DB.
+    Shared by the web router and the queue worker so both agree on the path.
+    """
+    cfg = get_settings()
+    if cfg.jobs_dir:
+        return cfg.jobs_dir
+    db = cfg.db_path
+    return str(Path(db).parent / "jobs") if db else "/tmp/hil-jobs"

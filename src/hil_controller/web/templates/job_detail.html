@@ -56,6 +56,28 @@
 </div>
 {% endif %}
 
+{% if assets %}
+<div class="tbl-wrap" style="margin-bottom:1.25rem;">
+  <div class="tbl-header"><h2>Assets</h2></div>
+  <table class="tbl">
+    <thead><tr><th>File</th><th>Kind</th><th>Size</th><th></th></tr></thead>
+    <tbody>
+    {% for a in assets %}
+      <tr>
+        <td class="mono" style="font-size:0.8rem;">{{ a.filename }}</td>
+        <td><span class="badge badge-info">{{ a.kind }}</span></td>
+        <td style="font-size:0.8rem;">{{ a.size_fmt }}</td>
+        <td>
+          <a class="btn btn-sm btn-outline" href="/ui/assets/{{ a.id }}/view"
+             target="_blank" rel="noopener">View</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 <div class="tbl-wrap">
   <div class="tbl-header">
     <h2>Log Output</h2>

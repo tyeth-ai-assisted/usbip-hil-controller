@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shlex
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from hil_controller.adapters.base import DeviceAdapter
@@ -14,6 +18,17 @@ from hil_controller.queue.events import EventBus
 log = logging.getLogger(__name__)
 
 TERMINAL_STATES = frozenset({"finished", "error", "timeout", "cancelled"})
+
+# Redact credentials that adapters can echo into deploy logs: tokens embedded in
+# clone URLs (https://<token>@host) and bare GitHub PATs. Keeps captured logs +
+# the deploy:info announce safe to surface in the UI.
+_URL_CRED_RE = re.compile(r"(https?://)[^@/\s]+@")
+_TOKEN_RE = re.compile(r"\b(?:ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})\b")
+
+
+def _redact_secrets(text: str) -> str:
+    text = _URL_CRED_RE.sub(r"\1<redacted>@", text)
+    return _TOKEN_RE.sub("<redacted>", text)
 
 
 @dataclass
@@ -164,16 +179,53 @@ class JobWorker:
             repo = source.get("repo", "")
             ref = source.get("ref", "")
             setup: list[str] = source.get("setup") or []
-            msg = f"cloning {repo} @ {ref}"
+            msg = f"cloning {_redact_secrets(repo)} @ {ref}"
             if setup:
                 cmd_str = setup[2] if len(setup) == 3 and setup[:2] == ["bash", "-c"] else shlex.join(setup)
-                msg += f"\nsetup: {cmd_str}"
+                msg += f"\nsetup: {_redact_secrets(cmd_str)}"
             await self._emit("log", {"stream": "deploy:info", "msg": msg})
-            await self.adapter.deploy()  # type: ignore[attr-defined]
-            for attr, stream in [("_deploy_stdout", "deploy:stdout"), ("_deploy_stderr", "deploy:stderr")]:
-                text = getattr(self.adapter, attr, "")
-                if text:
-                    await self._emit("log", {"stream": stream, "msg": text})
+            try:
+                await self.adapter.deploy()  # type: ignore[attr-defined]
+            finally:
+                # Capture the build/deploy output even when deploy() raises, so a
+                # failed compile (e.g. PlatformIO toolchain errors) is findable from
+                # the UI as a downloadable log asset — not just the streamed events.
+                await self._capture_deploy_log()
+
+    async def _capture_deploy_log(self) -> None:
+        sections: list[str] = []
+        for attr, stream in [("_deploy_stdout", "deploy:stdout"), ("_deploy_stderr", "deploy:stderr")]:
+            text = getattr(self.adapter, attr, "")
+            if text:
+                text = _redact_secrets(text)
+                await self._emit("log", {"stream": stream, "msg": text})
+                sections.append(f"===== {stream} =====\n{text}")
+        if sections:
+            await self._store_log_asset("deploy.log", "\n\n".join(sections))
+
+    async def _store_log_asset(self, filename: str, content: str) -> None:
+        """Persist a deploy/build log to disk and register it as a job asset."""
+        if not self.db_path:
+            return
+        try:
+            from hil_controller.config import resolve_jobs_dir
+            from hil_controller.db.connection import get_db
+
+            dest_dir = Path(resolve_jobs_dir()) / self.job_id
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / filename
+            dest.write_text(content, encoding="utf-8")
+            aid = str(uuid.uuid4())
+            async with get_db(self.db_path) as db:
+                await db.execute(
+                    "INSERT INTO assets (id, filename, path, size_bytes, kind, job_id, created_at) "
+                    "VALUES (?, ?, ?, ?, 'log', ?, ?)",
+                    (aid, filename, str(dest), len(content.encode("utf-8")),
+                     self.job_id, datetime.now(timezone.utc).isoformat()),
+                )
+                await db.commit()
+        except Exception as exc:  # never let log capture fail the job
+            log.warning("failed to store deploy log asset for %s: %s", self.job_id, exc)
 
     async def _run_script(self) -> int:
         if hasattr(self.adapter, "run"):

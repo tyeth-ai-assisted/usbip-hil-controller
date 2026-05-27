@@ -317,3 +317,103 @@ async def test_worker_purge_no_op_when_no_secrets(tmp_path, event_bus):
     )
     result = await worker.run()
     assert result.state == "finished"
+
+
+# --------------------------------------------------------------------------- #
+# Deploy-log capture as a downloadable asset (+ secret redaction)               #
+# --------------------------------------------------------------------------- #
+
+
+from hil_controller.queue.worker import _redact_secrets
+
+
+class _DeployAdapter:
+    """git-source adapter exposing deploy output; can fail mid-deploy."""
+
+    def __init__(self, *, stdout="", stderr="", source=None, fail=False) -> None:
+        self.source = source or {"repo": "https://github.com/o/r.git", "ref": "main"}
+        self._deploy_stdout = stdout
+        self._deploy_stderr = stderr
+        self._run_stdout = ""
+        self._run_stderr = ""
+        self._fail = fail
+
+    async def acquire(self) -> None:
+        pass
+
+    async def release(self) -> None:
+        pass
+
+    async def deploy(self) -> None:
+        if self._fail:
+            raise RuntimeError("build failed")
+
+    async def run(self) -> str:
+        return "pass"
+
+
+def test_redact_secrets_scrubs_url_creds_and_bare_tokens():
+    s = "git clone https://ghp_ABCDEFGHIJKLMNOPQRST@github.com/o/r.git; tok=ghp_ABCDEFGHIJKLMNOPQRST"
+    out = _redact_secrets(s)
+    assert "ghp_ABCDEFGHIJKLMNOPQRST" not in out
+    assert "https://<redacted>@github.com/o/r.git" in out
+
+
+async def _run_git_source_worker(tmp_path, event_bus, adapter, job_id):
+    from unittest.mock import patch as _patch
+
+    from hil_controller.db.connection import get_db, init_db, insert_job
+
+    db_file = str(tmp_path / f"{job_id}.db")
+    await init_db(db_file)
+    async with get_db(db_file) as db:
+        await insert_job(
+            db, job_id=job_id, request_json={"params": {}, "payload": {"kind": "git-source"}},
+            secrets_profile="p", exclusive_host=False,
+        )
+    worker = JobWorker(
+        job_id=job_id, adapter=adapter, event_bus=event_bus,
+        script="git-clone-and-run", params={},
+        payload={"kind": "git-source"}, timeouts={"total_s": 30}, db_path=db_file,
+    )
+    with _patch("hil_controller.config.resolve_jobs_dir", return_value=str(tmp_path / "jobs")):
+        result = await worker.run()
+    return db_file, result
+
+
+async def _assets_for(db_file, job_id):
+    from hil_controller.db.connection import get_db
+
+    async with get_db(db_file) as db:
+        async with db.execute(
+            "SELECT * FROM assets WHERE job_id = ? AND kind = 'log'", (job_id,)
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+@pytest.mark.asyncio
+async def test_deploy_log_captured_as_asset_with_redaction(tmp_path, event_bus):
+    adapter = _DeployAdapter(
+        source={"repo": "https://github.com/o/r.git", "ref": "main",
+                "setup": ["bash", "-c", "git clone https://ghp_ABCDEFGHIJKLMNOPQRST@github.com/o/p.git"]},
+        stdout="cloning https://ghp_ABCDEFGHIJKLMNOPQRST@github.com/o/p.git\nbuilt ok\n",
+    )
+    db_file, result = await _run_git_source_worker(tmp_path, event_bus, adapter, "dep-ok")
+    assert result.state == "finished"
+    assets = await _assets_for(db_file, "dep-ok")
+    assert len(assets) == 1
+    from pathlib import Path as _P
+    content = _P(assets[0]["path"]).read_text()
+    assert "built ok" in content
+    assert "ghp_ABCDEFGHIJKLMNOPQRST" not in content  # PAT scrubbed in the asset
+
+
+@pytest.mark.asyncio
+async def test_deploy_log_captured_even_when_deploy_fails(tmp_path, event_bus):
+    adapter = _DeployAdapter(stdout="toolchain error: Dynconfig not exist\n", fail=True)
+    db_file, result = await _run_git_source_worker(tmp_path, event_bus, adapter, "dep-fail")
+    assert result.state == "error"
+    assets = await _assets_for(db_file, "dep-fail")
+    assert len(assets) == 1  # build log persisted despite the failure
+    from pathlib import Path as _P
+    assert "Dynconfig" in _P(assets[0]["path"]).read_text()

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, File, Form, Request, UploadFile, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from hil_controller.auth.principal import Principal
@@ -1471,12 +1471,8 @@ def _disk_info(path: str = "") -> dict:
 
 
 def _jobs_dir() -> str:
-    from hil_controller.config import get_settings
-    cfg = get_settings()
-    if cfg.jobs_dir:
-        return cfg.jobs_dir
-    db = cfg.db_path
-    return str(Path(db).parent / "jobs") if db else "/tmp/hil-jobs"
+    from hil_controller.config import resolve_jobs_dir
+    return resolve_jobs_dir()
 
 
 async def _asset_rows(db_path: str) -> list[dict]:
@@ -1944,6 +1940,11 @@ async def job_detail(
         if row is None:
             return HTMLResponse("Job not found", status_code=404)
         events = await get_events_since(db, job_id, -1)
+        async with db.execute(
+            "SELECT * FROM assets WHERE job_id = ? AND purged_at IS NULL ORDER BY created_at",
+            (job_id,),
+        ) as cur:
+            asset_rows = await cur.fetchall()
 
     j = dict(row)
     req = json.loads(j.get("request_json") or "{}")
@@ -1952,10 +1953,17 @@ async def job_detail(
     j["ref"] = src.get("ref", "")
     j["duration"] = _duration(j.get("started_at"), j.get("finished_at"))
 
+    assets = []
+    for r in asset_rows:
+        a = dict(r)
+        a["size_fmt"] = _fmt_bytes(a.get("size_bytes") or 0)
+        assets.append(a)
+
     return _tr(request, "job_detail.html", {
         "token": hil_token,
         "active": "jobs",
         "job": j,
+        "assets": assets,
         "log_html": _render_events(events),
     })
 
@@ -2038,6 +2046,35 @@ async def assets_page(
         "purge_eligible": eligible,
         "disk": _disk_info(jdir),
     })
+
+
+@router.get("/assets/{asset_id}/view", include_in_schema=False, response_model=None)
+async def view_asset(
+    request: Request, asset_id: str, hil_token: str = Cookie(default="")
+) -> Response:
+    """Serve a stored asset. Logs render inline as text/plain; other kinds
+    download. URL-only assets redirect to their source."""
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        async with db.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)) as cur:
+            row = await cur.fetchone()
+    if row is None:
+        return HTMLResponse("Asset not found", status_code=404)
+    a = dict(row)
+    if a.get("purged_at"):
+        return HTMLResponse("Asset has been purged", status_code=410)
+    if a.get("url") and not a.get("path"):
+        return RedirectResponse(a["url"])
+    path = a.get("path")
+    if not path or not Path(path).exists():
+        return HTMLResponse("Asset file is missing on disk", status_code=404)
+    if a.get("kind") == "log":
+        return FileResponse(path, media_type="text/plain")
+    return FileResponse(
+        path, media_type="application/octet-stream", filename=a.get("filename") or "asset"
+    )
 
 
 @router.delete("/assets/{asset_id}", response_class=HTMLResponse, include_in_schema=False)
